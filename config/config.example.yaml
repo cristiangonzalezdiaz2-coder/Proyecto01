@@ -1,0 +1,32 @@
+# ============================================================
+#  Configuración del bot — copia a config/config.yaml y ajusta.
+#  Este archivo NO contiene secretos (esos van en .env).
+# ============================================================
+
+# Par a operar (formato MEXC spot, sin barra). Ej: BTCUSDT, ETHUSDT
+symbol: BTCUSDT
+
+# Intervalo de las velas para la estrategia.
+# Valores válidos MEXC: 1m, 5m, 15m, 30m, 60m, 4h, 1d, 1M
+interval: 15m
+
+# Cada cuántos segundos revisa el mercado el bot.
+poll_seconds: 60
+
+# ---------------- Estrategia ----------------
+strategy:
+  name: ma_crossover          # nombre de la estrategia a cargar
+  fast_period: 9              # media móvil rápida
+  slow_period: 21             # media móvil lenta
+
+# ---------------- Gestión de riesgo ----------------
+risk:
+  # Capital (en moneda cotizada, ej USDT) a usar por operación.
+  quote_per_trade: 20.0
+  # Stop-loss y take-profit como fracción (0.02 = 2%).
+  stop_loss_pct: 0.02
+  take_profit_pct: 0.04
+  # Máxima pérdida diaria permitida (en moneda cotizada). El bot se detiene si se alcanza.
+  max_daily_loss: 50.0
+  # Número máximo de posiciones abiertas simultáneas.
+  max_open_positions: 1

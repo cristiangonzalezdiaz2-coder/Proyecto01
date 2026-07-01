@@ -1,0 +1,30 @@
+# Secretos y credenciales — NUNCA subir al repo
+.env
+.env.*
+!.env.example
+config/config.yaml
+*.key
+*.pem
+
+# Python
+__pycache__/
+*.py[cod]
+*.egg-info/
+.venv/
+venv/
+env/
+.pytest_cache/
+.mypy_cache/
+.ruff_cache/
+
+# Datos y logs
+logs/
+*.log
+data/
+*.db
+*.sqlite
+
+# Sistema
+.DS_Store
+.idea/
+.vscode/
