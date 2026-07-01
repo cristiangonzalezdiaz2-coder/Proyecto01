@@ -50,6 +50,14 @@ modular preparada para añadir futuros más adelante. Incluye modo simulación
   debajo del mínimo del par), tras varios intentos la posición se retira con
   un cierre administrativo en vez de reintentar y notificar para siempre.
 - ✅ **CI con GitHub Actions**: la suite de tests corre en cada push.
+- ✅ **Señales vectorizadas**: el backtest y el walk-forward calculan los
+  indicadores en una sola pasada O(n) (con tests de paridad exacta contra la
+  evaluación por ventanas); una optimización de 2000 velas × 9 combinaciones
+  × 5 folds tarda décimas de segundo.
+- ✅ **Feed de precios WebSocket** (opcional, `websocket: true`): el stop-loss
+  y el trailing se comprueban cada ~2 s con el último precio del WS, en vez
+  de cada `poll_seconds`. Con fallback transparente a REST si el feed se cae
+  o no da datos frescos (el bot nunca depende de él).
 - ✅ **Riesgo global sin carreras**: la comprobación y la reserva de cupo son
   una única operación atómica, de modo que varios bots en paralelo no pueden
   exceder juntos los límites compartidos.

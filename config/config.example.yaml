@@ -17,6 +17,16 @@ poll_seconds: 60
 # (La carpeta data/ está en .gitignore.)
 db_path: data/bot.db
 
+# ---------------- WebSocket (opcional) ----------------
+# Si es true, el bot mantiene un feed de precios en tiempo real por WebSocket
+# y comprueba el stop-loss y el trailing cada ~2 s con el último precio,
+# en vez de esperar al siguiente poll. Si el feed se cae o no llegan datos
+# frescos, el bot sigue funcionando solo con REST (sin riesgo añadido).
+# Nota: MEXC está migrando su WebSocket a protobuf; si el canal JSON dejara
+# de servir datos, ajusta websocket_url o desactívalo.
+# websocket: true
+# websocket_url: wss://wbs.mexc.com/ws
+
 # ---------------- Estrategia ----------------
 # Estrategias disponibles y sus parámetros (deja solo un bloque activo):
 #

@@ -83,6 +83,12 @@ class AppConfig:
     telegram_token: str = ""
     telegram_chat_id: str = ""
     db_path: str = "data/bot.db"
+    # Feed de precios por WebSocket (opcional): si está activo, el stop-loss
+    # y el trailing se comprueban cada ~2 s con el último precio del WS, en
+    # vez de esperar al siguiente poll REST. Si el feed no da datos frescos,
+    # el bot sigue funcionando solo con REST (fallback transparente).
+    use_websocket: bool = False
+    websocket_url: str = ""  # vacío = URL por defecto del feed
 
     # ---- Accesos de compatibilidad (apuntan al primer bot) ----
     @property
@@ -209,4 +215,6 @@ def load_config(config_path: str = "config/config.yaml") -> AppConfig:
         telegram_token=telegram_token,
         telegram_chat_id=telegram_chat_id,
         db_path=raw.get("db_path", "data/bot.db"),
+        use_websocket=bool(raw.get("websocket", False)),
+        websocket_url=str(raw.get("websocket_url", "") or ""),
     )
