@@ -58,6 +58,22 @@ class RiskManager:
     def register_open(self, position: Position) -> None:
         self.open_positions.append(position)
 
+    def update_trailing(self, position: Position, price: float) -> bool:
+        """Trailing stop: sube el stop-loss siguiendo al precio.
+
+        Si trailing_stop_pct > 0, el stop se coloca a esa distancia por debajo
+        del máximo alcanzado. Solo sube (nunca baja del nivel actual), así que
+        con el avance del precio pasa a asegurar beneficios. Devuelve True si
+        el stop subió (el llamador debe persistir el cambio)."""
+        pct = self.config.trailing_stop_pct
+        if not pct:
+            return False
+        new_stop = price * (1 - pct)
+        if new_stop > position.stop_loss:
+            position.stop_loss = new_stop
+            return True
+        return False
+
     def should_close(self, position: Position, current_price: float) -> str | None:
         """Devuelve 'stop_loss', 'take_profit' o None (para el bot en vivo,
         que evalúa contra el precio actual en cada ciclo)."""

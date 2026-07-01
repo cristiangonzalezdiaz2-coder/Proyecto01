@@ -56,8 +56,10 @@ modular preparada para añadir futuros más adelante. Incluye modo simulación
 - ✅ **Señales solo con velas cerradas**: la vela en formación se usa para el
   precio actual y los SL/TP, pero las estrategias solo ven velas cerradas y
   cada una se evalúa una única vez (igual que en el backtest).
-- ✅ Gestión de riesgo: stop-loss, take-profit, tamaño de posición, límite de
-  pérdida diaria y máximo de posiciones abiertas.
+- ✅ Gestión de riesgo: stop-loss, take-profit, **trailing stop** opcional
+  (`trailing_stop_pct`; el stop sube con el precio y asegura beneficios, con
+  el nivel persistido entre reinicios), tamaño de posición, límite de pérdida
+  diaria y máximo de posiciones abiertas.
 - ✅ Backtesting con datos históricos reales y **salidas intra-vela**: los
   SL/TP se evalúan contra el high/low de cada vela (si una vela toca ambos,
   gana el stop) y los gaps se ejecutan al precio de apertura.

@@ -158,6 +158,15 @@ class PositionStore:
         )
         self._conn.commit()
 
+    def update_position_stop(self, position_id: int | None, stop_loss: float) -> None:
+        """Actualiza el stop-loss de una posición (trailing stop)."""
+        if position_id is None:
+            return
+        self._conn.execute(
+            "UPDATE positions SET stop_loss = ? WHERE id = ?", (stop_loss, position_id)
+        )
+        self._conn.commit()
+
     def update_position_quantity(self, position_id: int | None, quantity: float) -> None:
         """Ajusta la cantidad de una posición (p. ej. tras reconciliar balances)."""
         if position_id is None:

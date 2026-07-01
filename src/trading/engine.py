@@ -619,7 +619,17 @@ class TradingEngine:
         if self.live:
             self._check_exchange_tp()
 
-        # 2) Revisar salidas de posiciones abiertas (SL/TP) con el precio actual.
+        # 2) Trailing stop: subir el stop-loss siguiendo al precio actual
+        #    (persistiendo el nuevo nivel para que sobreviva reinicios).
+        for position in self.risk.open_positions:
+            if self.risk.update_trailing(position, price):
+                if self.symbol_info is not None:
+                    position.stop_loss = self.symbol_info.round_price(position.stop_loss)
+                self.store.update_position_stop(position.id, position.stop_loss)
+                log.info("[%s] Trailing stop: stop-loss subido a %.2f (precio %.2f).",
+                         self.name, position.stop_loss, price)
+
+        # 3) Revisar salidas de posiciones abiertas (SL/TP) con el precio actual.
         for position in list(self.risk.open_positions):
             reason = self.risk.should_close(position, price)
             if reason == "take_profit" and position.tp_order_id:
@@ -627,7 +637,7 @@ class TradingEngine:
             if reason:
                 self._market_sell(position, price, reason)
 
-        # 3) Evaluar la estrategia SOLO con velas cerradas: la última vela de
+        # 4) Evaluar la estrategia SOLO con velas cerradas: la última vela de
         #    MEXC es la que está en formación y sus señales pueden deshacerse
         #    antes del cierre (así, además, live coincide con el backtest).
         #    Cada vela cerrada se evalúa una única vez para no repetir la

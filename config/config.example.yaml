@@ -63,6 +63,11 @@ risk:
   # taker de MEXC spot). Se descuenta del PnL de cada operación en live, paper
   # y backtest. Ajústala a la de tu cuenta; 0 para ignorar comisiones.
   fee_pct: 0.0005
+  # Trailing stop (opcional): si es > 0, el stop-loss sube siguiendo al precio
+  # a esta distancia (0.015 = 1.5% por debajo del máximo alcanzado). Nunca
+  # baja del nivel actual, así que con el avance del precio pasa a asegurar
+  # beneficios. 0 = stop fijo. Pruébalo antes en el backtest con --trailing.
+  trailing_stop_pct: 0.0
 
 # ============================================================
 #  RIESGO GLOBAL (opcional, recomendado con multi-bot)

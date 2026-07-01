@@ -24,6 +24,11 @@ class RiskConfig:
     # taker de MEXC spot). Se descuenta del PnL de cada operación (compra y
     # venta) en live, paper y backtest. Pon 0 para ignorar comisiones.
     fee_pct: float = 0.0005
+    # Trailing stop (opcional): si es > 0, el stop-loss sube siguiendo al
+    # precio a esta distancia (0.015 = 1.5% por debajo del máximo alcanzado).
+    # Nunca baja del stop inicial y asegura beneficios cuando el precio
+    # avanza. 0 = desactivado (stop fijo).
+    trailing_stop_pct: float = 0.0
 
 
 @dataclass

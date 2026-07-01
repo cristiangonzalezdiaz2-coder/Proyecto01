@@ -107,6 +107,10 @@ def run_segment(df_full: pd.DataFrame, symbol: str, strategy,
                 _reason, exit_price = exit_
                 pnls.append(risk.register_close(pos, exit_price))
 
+        # Trailing stop (si está activo): efectivo desde la vela siguiente.
+        for pos in risk.open_positions:
+            risk.update_trailing(pos, float(candle["high"]))
+
         # Entradas solo dentro del segmento evaluado.
         if open_start <= i < open_end:
             signal = strategy.generate_signal(window)

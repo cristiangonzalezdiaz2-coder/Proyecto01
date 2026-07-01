@@ -24,12 +24,16 @@ from src.trading.engine import klines_to_df
 log = get_logger("backtest")
 
 
-def simulate(df, symbol: str, strategy, fee_pct: float | None = None) -> dict:
+def simulate(df, symbol: str, strategy, fee_pct: float | None = None,
+             trailing_pct: float = 0.0) -> dict:
     """Corre la estrategia vela a vela y devuelve métricas del resultado.
 
     El PnL es neto de comisiones (`fee_pct` por lado; por defecto el de
-    RiskConfig, la tarifa taker de MEXC spot)."""
-    cfg = RiskConfig() if fee_pct is None else RiskConfig(fee_pct=fee_pct)
+    RiskConfig, la tarifa taker de MEXC spot). `trailing_pct` > 0 activa el
+    trailing stop a esa distancia del máximo."""
+    cfg = RiskConfig(trailing_stop_pct=trailing_pct)
+    if fee_pct is not None:
+        cfg.fee_pct = fee_pct
     risk = RiskManager(cfg)
     trades = wins = 0
 
@@ -49,6 +53,12 @@ def simulate(df, symbol: str, strategy, fee_pct: float | None = None) -> dict:
                 trades += 1
                 wins += 1 if pnl > 0 else 0
 
+        # Trailing stop: el máximo de esta vela sube el stop, con efecto a
+        # partir de la vela SIGUIENTE (no se puede saber si el high llegó
+        # antes que el low dentro de la misma vela: convención conservadora).
+        for pos in risk.open_positions:
+            risk.update_trailing(pos, float(candle["high"]))
+
         signal = strategy.generate_signal(window)
         if signal == Signal.BUY and risk.can_open():
             risk.register_open(risk.build_position(symbol, price))
@@ -67,10 +77,12 @@ def fetch(symbol: str, interval: str, limit: int):
     return klines_to_df(client.get_klines(symbol, interval, limit=limit))
 
 
-def run_single(symbol, interval, limit, name, params, fee_pct):
+def run_single(symbol, interval, limit, name, params, fee_pct, trailing_pct=0.0):
     df = fetch(symbol, interval, limit)
     strat = load_strategy(name, params)
-    res = simulate(df, symbol, strat, fee_pct)
+    res = simulate(df, symbol, strat, fee_pct, trailing_pct)
+    if trailing_pct:
+        log.info("Trailing stop activo: %.2f%% por debajo del máximo.", trailing_pct * 100)
     log.info("=== Backtest %s | %s %s (%d velas) ===", name, symbol, interval, len(df))
     log.info("Operaciones: %d | Ganadoras: %d (%.1f%%)", res["trades"], res["wins"], res["win_rate"])
     log.info("PnL total neto (aprox, USDT): %.4f", res["pnl"])
@@ -78,15 +90,17 @@ def run_single(symbol, interval, limit, name, params, fee_pct):
              "Solo orientativo.", fee_pct * 100)
 
 
-def run_compare(symbol, interval, limit, fee_pct):
+def run_compare(symbol, interval, limit, fee_pct, trailing_pct=0.0):
     df = fetch(symbol, interval, limit)
     log.info("=== Comparativa de estrategias | %s %s (%d velas) ===", symbol, interval, len(df))
+    if trailing_pct:
+        log.info("Trailing stop activo: %.2f%% por debajo del máximo.", trailing_pct * 100)
     log.info("%-14s %8s %8s %10s %12s", "estrategia", "ops", "aciertos", "% acierto", "PnL(USDT)")
     log.info("-" * 56)
     rows = []
     for name in STRATEGIES:
         strat = load_strategy(name, {})  # parámetros por defecto de cada una
-        res = simulate(df, symbol, strat, fee_pct)
+        res = simulate(df, symbol, strat, fee_pct, trailing_pct)
         rows.append((name, res))
     # Ordenar por PnL descendente.
     rows.sort(key=lambda r: r[1]["pnl"], reverse=True)
@@ -112,13 +126,17 @@ def main() -> None:
     p.add_argument("--fee", type=float, default=RiskConfig().fee_pct,
                    help="Comisión por lado como fracción (0.0005 = 0.05%%). "
                         "Usa 0 para ignorar comisiones.")
+    p.add_argument("--trailing", type=float, default=0.0,
+                   help="Trailing stop como fracción del máximo alcanzado "
+                        "(0.015 = 1.5%%). 0 = stop fijo (por defecto).")
     args = p.parse_args()
 
     if args.compare:
-        run_compare(args.symbol, args.interval, args.limit, args.fee)
+        run_compare(args.symbol, args.interval, args.limit, args.fee, args.trailing)
     else:
         params = json.loads(args.params)
-        run_single(args.symbol, args.interval, args.limit, args.strategy, params, args.fee)
+        run_single(args.symbol, args.interval, args.limit, args.strategy, params,
+                   args.fee, args.trailing)
 
 
 if __name__ == "__main__":
