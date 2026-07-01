@@ -32,6 +32,8 @@ class AppConfig:
     poll_seconds: int
     strategy: StrategyConfig
     risk: RiskConfig
+    telegram_token: str = ""
+    telegram_chat_id: str = ""
 
 
 def load_config(config_path: str = "config/config.yaml") -> AppConfig:
@@ -41,6 +43,8 @@ def load_config(config_path: str = "config/config.yaml") -> AppConfig:
     api_key = os.getenv("MEXC_API_KEY", "")
     api_secret = os.getenv("MEXC_API_SECRET", "")
     trading_mode = os.getenv("TRADING_MODE", "paper").lower()
+    telegram_token = os.getenv("TELEGRAM_BOT_TOKEN", "")
+    telegram_chat_id = os.getenv("TELEGRAM_CHAT_ID", "")
 
     path = Path(config_path)
     if not path.exists():
@@ -68,4 +72,6 @@ def load_config(config_path: str = "config/config.yaml") -> AppConfig:
         poll_seconds=int(raw.get("poll_seconds", 60)),
         strategy=strategy,
         risk=risk,
+        telegram_token=telegram_token,
+        telegram_chat_id=telegram_chat_id,
     )

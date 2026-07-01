@@ -16,6 +16,7 @@ modular preparada para añadir futuros más adelante. Incluye modo simulación
 - ✅ Gestión de riesgo: stop-loss, take-profit, tamaño de posición, límite de
   pérdida diaria y máximo de posiciones abiertas.
 - ✅ Backtesting con datos históricos reales.
+- ✅ Notificaciones por **Telegram** en cada operación (opcional).
 - ✅ Logging a consola y archivo.
 
 ## Estructura
@@ -75,6 +76,29 @@ Proyecto01/
 7. Cuando estés seguro, cambia `TRADING_MODE=live` en `.env` para operar con
    dinero real. **Hazlo bajo tu propia responsabilidad y con poco capital.**
 
+## Notificaciones por Telegram (opcional)
+
+El bot envía un mensaje en cada operación (compra, venta por stop-loss /
+take-profit / señal, y cuando se alcanza el límite de pérdida diaria).
+
+1. Abre Telegram, habla con **@BotFather**, crea un bot y copia su **token**.
+2. Escríbele cualquier mensaje a tu nuevo bot.
+3. Visita `https://api.telegram.org/bot<TOKEN>/getUpdates` y busca
+   `"chat":{"id": ...}` — ese número es tu **chat_id**.
+4. Rellena en `.env`:
+   ```
+   TELEGRAM_BOT_TOKEN=123456:ABC-DEF...
+   TELEGRAM_CHAT_ID=123456789
+   ```
+5. Comprueba que funciona:
+   ```bash
+   python main.py --test-telegram
+   ```
+
+Si dejas ambos valores vacíos, las notificaciones se desactivan automáticamente
+(el bot sigue funcionando igual). Un fallo de red al notificar nunca detiene el
+trading.
+
 ## Seguridad de la API key
 
 - Crea la key en https://www.mexc.com/user/openapi con permisos **solo de
@@ -100,7 +124,7 @@ pytest
 
 - [ ] Añadir más estrategias (RSI, MACD, grid, DCA).
 - [ ] Persistir el estado de las posiciones (SQLite) para reinicios.
-- [ ] Notificaciones (Telegram/email) en cada operación.
+- [x] Notificaciones (Telegram) en cada operación.
 - [ ] Ajustar cantidades a la precisión (`exchangeInfo`) de cada símbolo.
 - [ ] Soporte de futuros cuando la cuenta lo permita.
 ```

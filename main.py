@@ -33,13 +33,33 @@ def check_connection(cfg) -> int:
         return 1
 
 
+def test_telegram(cfg) -> int:
+    from src.notifications import TelegramNotifier
+
+    notifier = TelegramNotifier(cfg.telegram_token, cfg.telegram_chat_id)
+    if not notifier.enabled:
+        log.error("Telegram no configurado. Rellena TELEGRAM_BOT_TOKEN y TELEGRAM_CHAT_ID en .env")
+        return 1
+    ok = notifier.send("✅ Prueba de notificación del bot MEXC. ¡Funciona!")
+    if ok:
+        log.info("Mensaje de prueba enviado correctamente.")
+        return 0
+    log.error("No se pudo enviar el mensaje. Revisa el token y el chat_id.")
+    return 1
+
+
 def main() -> int:
     parser = argparse.ArgumentParser(description="Bot de trading MEXC (spot)")
     parser.add_argument("--check", action="store_true", help="Comprobar conexión y salir")
+    parser.add_argument("--test-telegram", action="store_true",
+                        help="Enviar un mensaje de prueba a Telegram y salir")
     parser.add_argument("--config", default="config/config.yaml", help="Ruta al YAML de config")
     args = parser.parse_args()
 
     cfg = load_config(args.config)
+
+    if args.test_telegram:
+        return test_telegram(cfg)
 
     if args.check:
         return check_connection(cfg)

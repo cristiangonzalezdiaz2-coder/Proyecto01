@@ -12,6 +12,7 @@ import pandas as pd
 from ..config import AppConfig
 from ..logger import get_logger
 from ..mexc import MexcSpotClient
+from ..notifications import TelegramNotifier
 from ..risk import Position, RiskManager
 from ..strategies import Signal, load_strategy
 
@@ -34,10 +35,17 @@ class TradingEngine:
         self.strategy = load_strategy(config.strategy.name, config.strategy.params)
         self.risk = RiskManager(config.risk)
         self.live = config.trading_mode == "live"
+        self.notifier = TelegramNotifier(config.telegram_token, config.telegram_chat_id)
 
-        mode = "LIVE (dinero real)" if self.live else "PAPER (simulación)"
+        self.mode_label = "LIVE (dinero real)" if self.live else "PAPER (simulación)"
         log.info("Motor iniciado | modo=%s | símbolo=%s | estrategia=%s",
-                 mode, config.symbol, self.strategy.name)
+                 self.mode_label, config.symbol, self.strategy.name)
+        self.notifier.send(
+            f"🤖 <b>Bot MEXC iniciado</b>\n"
+            f"Modo: {self.mode_label}\n"
+            f"Símbolo: {config.symbol}\n"
+            f"Estrategia: {self.strategy.name}"
+        )
 
     # ------------------------------------------------------------------
     def _market_buy(self, price: float) -> Position:
@@ -54,6 +62,14 @@ class TradingEngine:
             log.info("[PAPER] Compra simulada %.6f @ %.2f (SL %.2f / TP %.2f)",
                      position.quantity, price, position.stop_loss, position.take_profit)
         self.risk.register_open(position)
+        self.notifier.send(
+            f"🟢 <b>COMPRA</b> ({self.mode_label})\n"
+            f"{self.config.symbol}\n"
+            f"Precio: <b>{price:.2f}</b>\n"
+            f"Cantidad: {position.quantity:.6f}\n"
+            f"Stop-loss: {position.stop_loss:.2f}\n"
+            f"Take-profit: {position.take_profit:.2f}"
+        )
         return position
 
     def _market_sell(self, position: Position, price: float, reason: str) -> None:
@@ -68,8 +84,28 @@ class TradingEngine:
         pnl = self.risk.register_close(position, price)
         log.info("[%s] Cierre por %s @ %.2f | PnL=%.4f | PnL diario=%.4f",
                  "LIVE" if self.live else "PAPER", reason, price, pnl, self.risk.daily_pnl)
+
+        emoji = "✅" if pnl >= 0 else "🔴"
+        reasons_es = {
+            "stop_loss": "Stop-loss",
+            "take_profit": "Take-profit",
+            "signal_sell": "Señal de venta",
+        }
+        self.notifier.send(
+            f"{emoji} <b>VENTA</b> ({self.mode_label})\n"
+            f"{self.config.symbol}\n"
+            f"Motivo: {reasons_es.get(reason, reason)}\n"
+            f"Precio: <b>{price:.2f}</b>\n"
+            f"PnL operación: <b>{pnl:+.4f}</b>\n"
+            f"PnL del día: {self.risk.daily_pnl:+.4f}"
+        )
+
         if self.risk.halted:
             log.warning("Límite de pérdida diaria alcanzado. El bot deja de abrir posiciones.")
+            self.notifier.send(
+                "⛔ <b>Límite de pérdida diaria alcanzado</b>\n"
+                "El bot deja de abrir nuevas posiciones hasta mañana."
+            )
 
     # ------------------------------------------------------------------
     def _step(self) -> None:
