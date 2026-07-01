@@ -24,6 +24,8 @@ class PositionStore:
         # check_same_thread=False por si se usa desde hilos distintos.
         self._conn = sqlite3.connect(db_path, check_same_thread=False)
         self._conn.row_factory = sqlite3.Row
+        # WAL permite que el dashboard lea mientras el bot escribe sin bloqueos.
+        self._conn.execute("PRAGMA journal_mode=WAL")
         self._create_tables()
         log.info("Persistencia activa en %s", db_path)
 
@@ -132,6 +134,46 @@ class PositionStore:
         if row is None:
             return None
         return float(row["daily_pnl"]), bool(row["halted"])
+
+    # ------------------------- Lectura (dashboard) -------------------------
+    def fetch_open_positions(self) -> list[dict]:
+        rows = self._conn.execute(
+            "SELECT * FROM positions WHERE status = 'open' ORDER BY id DESC"
+        ).fetchall()
+        return [dict(r) for r in rows]
+
+    def fetch_trades(self, limit: int = 50) -> list[dict]:
+        rows = self._conn.execute(
+            "SELECT * FROM trades ORDER BY id DESC LIMIT ?", (limit,)
+        ).fetchall()
+        return [dict(r) for r in rows]
+
+    def fetch_daily_states(self, limit: int = 30) -> list[dict]:
+        rows = self._conn.execute(
+            "SELECT * FROM daily_state ORDER BY day DESC LIMIT ?", (limit,)
+        ).fetchall()
+        return [dict(r) for r in rows]
+
+    def fetch_summary(self) -> dict:
+        """Métricas globales calculadas sobre el historial de operaciones."""
+        row = self._conn.execute(
+            """SELECT COUNT(*)                        AS total,
+                      COALESCE(SUM(pnl), 0)           AS total_pnl,
+                      COALESCE(SUM(pnl > 0), 0)       AS wins,
+                      COALESCE(AVG(pnl), 0)           AS avg_pnl
+               FROM trades"""
+        ).fetchone()
+        total = row["total"] or 0
+        wins = row["wins"] or 0
+        return {
+            "total_trades": total,
+            "wins": wins,
+            "losses": total - wins,
+            "win_rate": (wins / total * 100) if total else 0.0,
+            "total_pnl": row["total_pnl"] or 0.0,
+            "avg_pnl": row["avg_pnl"] or 0.0,
+            "open_positions": len(self.fetch_open_positions()),
+        }
 
     def close(self) -> None:
         self._conn.close()

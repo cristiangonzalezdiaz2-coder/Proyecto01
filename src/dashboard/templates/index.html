@@ -1,0 +1,148 @@
+<!DOCTYPE html>
+<html lang="es">
+<head>
+  <meta charset="UTF-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1.0">
+  <title>Bot MEXC · Dashboard</title>
+  <style>
+    :root {
+      --bg: #0e1116; --card: #161b22; --border: #2b323c;
+      --text: #e6edf3; --muted: #8b949e; --green: #2ea043; --red: #f85149;
+      --accent: #388bfd;
+    }
+    * { box-sizing: border-box; }
+    body { margin: 0; font-family: -apple-system, Segoe UI, Roboto, Helvetica, Arial, sans-serif;
+           background: var(--bg); color: var(--text); }
+    header { padding: 16px 24px; border-bottom: 1px solid var(--border);
+             display: flex; align-items: center; justify-content: space-between; }
+    header h1 { font-size: 18px; margin: 0; }
+    .muted { color: var(--muted); font-size: 13px; }
+    main { padding: 24px; max-width: 1100px; margin: 0 auto; }
+    .cards { display: grid; grid-template-columns: repeat(auto-fit, minmax(160px, 1fr)); gap: 14px; }
+    .card { background: var(--card); border: 1px solid var(--border); border-radius: 10px; padding: 16px; }
+    .card .label { color: var(--muted); font-size: 12px; text-transform: uppercase; letter-spacing: .04em; }
+    .card .value { font-size: 24px; font-weight: 600; margin-top: 6px; }
+    section { margin-top: 28px; }
+    section h2 { font-size: 15px; color: var(--muted); font-weight: 600;
+                 text-transform: uppercase; letter-spacing: .04em; margin-bottom: 10px; }
+    table { width: 100%; border-collapse: collapse; background: var(--card);
+            border: 1px solid var(--border); border-radius: 10px; overflow: hidden; }
+    th, td { padding: 10px 14px; text-align: right; font-size: 14px; border-bottom: 1px solid var(--border); }
+    th:first-child, td:first-child { text-align: left; }
+    th { color: var(--muted); font-weight: 600; background: #12171e; }
+    tr:last-child td { border-bottom: none; }
+    .pos { color: var(--green); } .neg { color: var(--red); }
+    .empty { color: var(--muted); padding: 16px; text-align: center; }
+    .pill { display:inline-block; padding:2px 8px; border-radius:999px; font-size:12px;
+            background:#1f2937; color:var(--muted); }
+    .dot { height:8px; width:8px; border-radius:50%; background:var(--green);
+           display:inline-block; margin-right:6px; animation: pulse 2s infinite; }
+    @keyframes pulse { 0%,100%{opacity:1} 50%{opacity:.3} }
+  </style>
+</head>
+<body>
+  <header>
+    <h1>🤖 Bot MEXC · Dashboard</h1>
+    <span class="muted"><span class="dot"></span>Actualizado <span id="updated">—</span></span>
+  </header>
+  <main>
+    {% if not db_exists %}
+    <div class="card"><div class="empty">
+      No se encontró la base de datos todavía. Arranca el bot al menos una vez
+      (<code>python main.py</code>) para generar operaciones.
+    </div></div>
+    {% endif %}
+
+    <div class="cards" id="cards"></div>
+
+    <section>
+      <h2>Posiciones abiertas</h2>
+      <table id="open-table">
+        <thead><tr><th>Símbolo</th><th>Entrada</th><th>Cantidad</th><th>Stop-loss</th><th>Take-profit</th><th>Abierta</th></tr></thead>
+        <tbody></tbody>
+      </table>
+    </section>
+
+    <section>
+      <h2>Historial de operaciones</h2>
+      <table id="trades-table">
+        <thead><tr><th>Símbolo</th><th>Entrada</th><th>Salida</th><th>Cantidad</th><th>Motivo</th><th>PnL</th><th>Cerrada</th></tr></thead>
+        <tbody></tbody>
+      </table>
+    </section>
+
+    <section>
+      <h2>PnL por día</h2>
+      <table id="daily-table">
+        <thead><tr><th>Día</th><th>PnL</th><th>Estado</th></tr></thead>
+        <tbody></tbody>
+      </table>
+    </section>
+  </main>
+
+  <script>
+    const fmt = (n, d = 2) => (n === null || n === undefined) ? "—" : Number(n).toFixed(d);
+    const cls = (n) => n > 0 ? "pos" : (n < 0 ? "neg" : "");
+    const sign = (n) => (n > 0 ? "+" : "") + fmt(n, 4);
+    const shortTime = (iso) => iso ? iso.replace("T", " ").slice(0, 16) : "—";
+
+    function renderCards(s) {
+      const cards = [
+        ["PnL total", sign(s.total_pnl), cls(s.total_pnl)],
+        ["Operaciones", s.total_trades, ""],
+        ["% Acierto", fmt(s.win_rate, 1) + "%", ""],
+        ["Ganadoras / Perdedoras", `${s.wins} / ${s.losses}`, ""],
+        ["PnL medio", sign(s.avg_pnl), cls(s.avg_pnl)],
+        ["Posiciones abiertas", s.open_positions, ""],
+      ];
+      document.getElementById("cards").innerHTML = cards.map(([l, v, c]) =>
+        `<div class="card"><div class="label">${l}</div><div class="value ${c}">${v}</div></div>`
+      ).join("");
+    }
+
+    function fillTable(id, rows, cols, emptyMsg) {
+      const tbody = document.querySelector(`#${id} tbody`);
+      if (!rows.length) {
+        const span = document.querySelectorAll(`#${id} th`).length;
+        tbody.innerHTML = `<tr><td colspan="${span}" class="empty">${emptyMsg}</td></tr>`;
+        return;
+      }
+      tbody.innerHTML = rows.map(r => "<tr>" + cols(r).join("") + "</tr>").join("");
+    }
+
+    async function refresh() {
+      try {
+        const res = await fetch("/api/state");
+        const data = await res.json();
+        renderCards(data.summary);
+
+        fillTable("open-table", data.open_positions, r => [
+          `<td>${r.symbol}</td>`, `<td>${fmt(r.entry_price)}</td>`,
+          `<td>${fmt(r.quantity, 6)}</td>`, `<td>${fmt(r.stop_loss)}</td>`,
+          `<td>${fmt(r.take_profit)}</td>`, `<td>${shortTime(r.opened_at)}</td>`,
+        ], "No hay posiciones abiertas.");
+
+        fillTable("trades-table", data.trades, r => [
+          `<td>${r.symbol}</td>`, `<td>${fmt(r.entry_price)}</td>`,
+          `<td>${fmt(r.exit_price)}</td>`, `<td>${fmt(r.quantity, 6)}</td>`,
+          `<td><span class="pill">${r.reason || "—"}</span></td>`,
+          `<td class="${cls(r.pnl)}">${sign(r.pnl)}</td>`,
+          `<td>${shortTime(r.closed_at)}</td>`,
+        ], "Aún no hay operaciones cerradas.");
+
+        fillTable("daily-table", data.daily, r => [
+          `<td>${r.day}</td>`, `<td class="${cls(r.daily_pnl)}">${sign(r.daily_pnl)}</td>`,
+          `<td>${r.halted ? "⛔ Bloqueado" : "✅ Activo"}</td>`,
+        ], "Sin datos diarios todavía.");
+
+        document.getElementById("updated").textContent = new Date().toLocaleTimeString();
+      } catch (e) {
+        document.getElementById("updated").textContent = "error de conexión";
+      }
+    }
+
+    refresh();
+    setInterval(refresh, 5000);
+  </script>
+</body>
+</html>

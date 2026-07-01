@@ -19,6 +19,7 @@ modular preparada para añadir futuros más adelante. Incluye modo simulación
 - ✅ Backtesting con datos históricos reales.
 - ✅ Notificaciones por **Telegram** en cada operación (opcional).
 - ✅ **Persistencia en SQLite**: sobrevive a reinicios sin perder posiciones.
+- ✅ **Dashboard web** (solo lectura) para ver posiciones, historial y PnL.
 - ✅ Logging a consola y archivo.
 
 ## Estructura
@@ -26,7 +27,8 @@ modular preparada para añadir futuros más adelante. Incluye modo simulación
 ```
 Proyecto01/
 ├── main.py                 # punto de entrada del bot
-├── backtest.py             # backtesting de la estrategia
+├── backtest.py             # backtesting de estrategias
+├── dashboard.py            # servidor del dashboard web
 ├── requirements.txt
 ├── .env.example            # plantilla de credenciales (copiar a .env)
 ├── config/
@@ -35,8 +37,11 @@ Proyecto01/
 │   ├── config.py           # carga de .env + YAML
 │   ├── logger.py
 │   ├── mexc/               # cliente de la API de MEXC
-│   ├── strategies/         # estrategias (ma_crossover, ...)
+│   ├── strategies/         # estrategias (ma_crossover, rsi, macd, bollinger)
 │   ├── risk/               # gestión de riesgo
+│   ├── persistence/        # almacenamiento en SQLite
+│   ├── notifications/      # notificaciones (Telegram)
+│   ├── dashboard/          # dashboard web Flask (solo lectura)
 │   └── trading/            # motor de ejecución (paper/live)
 └── tests/
 ```
@@ -153,6 +158,24 @@ Tablas:
 - `trades` — historial de operaciones cerradas con su PnL.
 - `daily_state` — PnL y estado de bloqueo por día.
 
+## Dashboard web
+
+Un panel de **solo lectura** que lee la misma base de datos SQLite y muestra
+posiciones abiertas, historial de operaciones y estadísticas (PnL, % de acierto).
+Se actualiza solo cada 5 segundos. No ejecuta órdenes ni modifica nada.
+
+```bash
+python dashboard.py                 # http://127.0.0.1:8000
+python dashboard.py --port 8080
+python dashboard.py --host 0.0.0.0  # accesible desde tu red local
+```
+
+Puedes tenerlo abierto mientras el bot corre en otra terminal: gracias al modo
+WAL de SQLite, el dashboard lee sin bloquear las escrituras del bot.
+
+> Si expones el dashboard con `--host 0.0.0.0`, tenlo en cuenta: no incluye
+> autenticación. Úsalo solo en tu red local o detrás de un proxy con contraseña.
+
 ## Pruebas
 
 ```bash
@@ -166,6 +189,7 @@ pytest
 - [ ] Estrategias de grid trading y DCA.
 - [x] Persistir el estado de las posiciones (SQLite) para reinicios.
 - [x] Notificaciones (Telegram) en cada operación.
+- [x] Dashboard web para ver posiciones e historial.
 - [ ] Ajustar cantidades a la precisión (`exchangeInfo`) de cada símbolo.
 - [ ] Soporte de futuros cuando la cuenta lo permita.
 ```
