@@ -18,6 +18,8 @@ modular preparada para añadir futuros más adelante. Incluye modo simulación
   riesgo y estado, desglosados en el dashboard.
 - ✅ **Riesgo global compartido**: tope de exposición, posiciones y pérdida
   diaria combinados entre todos los bots.
+- ✅ **Optimización walk-forward**: ajusta parámetros validando siempre en datos
+  que el optimizador no vio (out-of-sample), para evitar el sobreajuste.
 - ✅ **Ajuste de precisión por símbolo** (`exchangeInfo`): redondea cantidades
   y precios y valida el importe mínimo para que MEXC no rechace las órdenes.
 - ✅ Gestión de riesgo: stop-loss, take-profit, tamaño de posición, límite de
@@ -35,6 +37,7 @@ modular preparada para añadir futuros más adelante. Incluye modo simulación
 Proyecto01/
 ├── main.py                 # punto de entrada del bot
 ├── backtest.py             # backtesting de estrategias
+├── optimize.py             # optimización walk-forward de parámetros
 ├── dashboard.py            # servidor del dashboard web
 ├── requirements.txt
 ├── .env.example            # plantilla de credenciales (copiar a .env)
@@ -50,6 +53,7 @@ Proyecto01/
 │   ├── persistence/        # almacenamiento en SQLite
 │   ├── notifications/      # notificaciones (Telegram)
 │   ├── analytics/          # métricas de rendimiento y curva de equity
+│   ├── optimize/           # optimización walk-forward
 │   └── dashboard/          # dashboard web Flask (solo lectura)
 └── tests/
 ```
@@ -85,6 +89,9 @@ Proyecto01/
 
    # Probar una estrategia concreta con sus parámetros:
    python backtest.py --strategy rsi --params '{"period": 14}'
+
+   # Optimizar parámetros con validación walk-forward (sin sobreajuste):
+   python optimize.py --strategy ma_crossover --objective sharpe
    ```
 
 6. **Ejecuta en modo simulación** (por defecto `TRADING_MODE=paper`):
@@ -147,6 +154,32 @@ parámetros (ver `config/config.example.yaml`).
 Usa `python backtest.py --compare` para ver cuál rinde mejor en un par e
 intervalo concretos antes de elegir. Puedes añadir la tuya creando una clase que
 herede de `Strategy` en `src/strategies/` y registrándola en `STRATEGIES`.
+
+## Optimización walk-forward
+
+Ajustar parámetros mirando solo el pasado lleva al **sobreajuste**: parecen
+geniales con datos históricos y fallan en real. El walk-forward evita esto:
+
+1. Divide el histórico en tramos consecutivos.
+2. En cada "fold", optimiza los parámetros **solo** con los datos de
+   entrenamiento y los evalúa en el tramo **siguiente**, que no vio (OOS).
+3. Agrega todos los resultados out-of-sample: esa es la estimación honesta de
+   cómo generalizarían a datos nuevos.
+
+```bash
+python optimize.py --strategy ma_crossover --symbol BTCUSDT --interval 1h --limit 1000
+python optimize.py --strategy rsi --objective sharpe --folds 6
+```
+
+Objetivos (`--objective`): `pnl`, `expectancy`, `sharpe`, `profit_factor`,
+`win_rate`. El informe muestra, por fold, los mejores parámetros y su resultado
+OOS; el **OOS combinado** (lo que importa); y una **referencia de sobreajuste**
+(optimizar sobre todo el histórico). Si el OOS combinado es mucho peor que esa
+referencia, esos parámetros están sobreajustados y no debes fiarte de ellos.
+
+> Elige los parámetros que rinden bien OOS de forma **consistente entre folds**,
+> no los que dieron el mayor PnL en un solo tramo. Los resultados no incluyen
+> comisiones ni slippage: son orientativos, no una garantía.
 
 ## Precisión por símbolo
 
@@ -283,6 +316,7 @@ pytest
 - [x] Métricas avanzadas y curva de equity en el dashboard.
 - [x] Multi-bot: varias estrategias/pares en paralelo.
 - [x] Límite de riesgo global compartido entre bots.
+- [x] Optimización walk-forward de parámetros (validación out-of-sample).
 - [x] Ajustar cantidades a la precisión (`exchangeInfo`) de cada símbolo.
 - [ ] Soporte de futuros cuando la cuenta lo permita.
 ```
