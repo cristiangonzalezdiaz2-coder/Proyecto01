@@ -60,6 +60,10 @@ modular preparada para añadir futuros más adelante. Incluye modo simulación
   (`trailing_stop_pct`; el stop sube con el precio y asegura beneficios, con
   el nivel persistido entre reinicios), tamaño de posición, límite de pérdida
   diaria y máximo de posiciones abiertas.
+- ✅ **Sizing dinámico** opcional: además del importe fijo, `balance_pct`
+  (un % del balance disponible) o `risk_pct` (arriesgar un % fijo del balance
+  por operación según la distancia del stop). En live usa el saldo real; en
+  paper/backtest, un capital simulado que compone con el PnL realizado.
 - ✅ Backtesting con datos históricos reales y **salidas intra-vela**: los
   SL/TP se evalúan contra el high/low de cada vela (si una vela toca ambos,
   gana el stop) y los gaps se ejecutan al precio de apertura.

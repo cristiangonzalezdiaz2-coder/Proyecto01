@@ -42,9 +42,31 @@ class RiskManager:
             return False
         return len(self.open_positions) < self.config.max_open_positions
 
-    def build_position(self, symbol: str, entry_price: float) -> Position:
-        """Crea una posición dimensionada según quote_per_trade y los % de riesgo."""
-        quantity = self.config.quote_per_trade / entry_price
+    def position_size(self, available_quote: float | None) -> float:
+        """Importe en moneda cotizada para la próxima compra según `sizing`.
+
+        'fixed' devuelve quote_per_trade. Los modos dinámicos parten del
+        balance disponible; si este no se conoce (None), se cae a
+        quote_per_trade. El resultado nunca supera el balance disponible."""
+        c = self.config
+        if c.sizing == "fixed" or available_quote is None:
+            return c.quote_per_trade
+        if c.sizing == "balance_pct":
+            amount = available_quote * c.sizing_pct
+        elif c.sizing == "risk_pct":
+            # Arriesgar sizing_pct del balance: si el stop salta, se pierde
+            # (aprox.) balance * sizing_pct. tamaño = riesgo / distancia stop.
+            amount = available_quote * c.sizing_pct / c.stop_loss_pct
+        else:
+            raise ValueError(f"Modo de sizing desconocido: {c.sizing!r}")
+        return min(amount, available_quote)
+
+    def build_position(self, symbol: str, entry_price: float,
+                       quote_amount: float | None = None) -> Position:
+        """Crea una posición dimensionada con `quote_amount` (o quote_per_trade
+        si no se indica) y los % de riesgo."""
+        quote = quote_amount if quote_amount is not None else self.config.quote_per_trade
+        quantity = quote / entry_price
         stop_loss = entry_price * (1 - self.config.stop_loss_pct)
         take_profit = entry_price * (1 + self.config.take_profit_pct)
         return Position(

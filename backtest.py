@@ -13,8 +13,9 @@ Ejemplos:
 """
 import argparse
 import json
+from dataclasses import replace
 
-from src.config import RiskConfig
+from src.config import RiskConfig, validate_risk
 from src.logger import get_logger
 from src.mexc import MexcSpotClient
 from src.risk import RiskManager
@@ -25,17 +26,22 @@ log = get_logger("backtest")
 
 
 def simulate(df, symbol: str, strategy, fee_pct: float | None = None,
-             trailing_pct: float = 0.0) -> dict:
+             trailing_pct: float = 0.0, risk_cfg: RiskConfig | None = None) -> dict:
     """Corre la estrategia vela a vela y devuelve métricas del resultado.
 
     El PnL es neto de comisiones (`fee_pct` por lado; por defecto el de
     RiskConfig, la tarifa taker de MEXC spot). `trailing_pct` > 0 activa el
-    trailing stop a esa distancia del máximo."""
-    cfg = RiskConfig(trailing_stop_pct=trailing_pct)
+    trailing stop. `risk_cfg` permite pasar una configuración completa (p. ej.
+    sizing dinámico); las compras se dimensionan contra una equity simulada
+    que parte de paper_balance y compone con el PnL realizado."""
+    cfg = risk_cfg or RiskConfig()
+    if trailing_pct:
+        cfg.trailing_stop_pct = trailing_pct
     if fee_pct is not None:
         cfg.fee_pct = fee_pct
     risk = RiskManager(cfg)
     trades = wins = 0
+    equity = cfg.paper_balance  # solo se usa con sizing dinámico
 
     for i in range(1, len(df)):
         window = df.iloc[: i + 1]
@@ -50,6 +56,7 @@ def simulate(df, symbol: str, strategy, fee_pct: float | None = None,
             if exit_:
                 _reason, exit_price = exit_
                 pnl = risk.register_close(pos, exit_price)
+                equity += pnl
                 trades += 1
                 wins += 1 if pnl > 0 else 0
 
@@ -61,15 +68,19 @@ def simulate(df, symbol: str, strategy, fee_pct: float | None = None,
 
         signal = strategy.generate_signal(window)
         if signal == Signal.BUY and risk.can_open():
-            risk.register_open(risk.build_position(symbol, price))
+            committed = sum(p.entry_price * p.quantity for p in risk.open_positions)
+            size = risk.position_size(max(equity - committed, 0.0))
+            risk.register_open(risk.build_position(symbol, price, size))
         elif signal == Signal.SELL:
             for pos in list(risk.open_positions):
                 pnl = risk.register_close(pos, price)
+                equity += pnl
                 trades += 1
                 wins += 1 if pnl > 0 else 0
 
     win_rate = (wins / trades * 100) if trades else 0.0
-    return {"trades": trades, "wins": wins, "win_rate": win_rate, "pnl": risk.daily_pnl}
+    return {"trades": trades, "wins": wins, "win_rate": win_rate,
+            "pnl": risk.daily_pnl, "final_equity": equity}
 
 
 def fetch(symbol: str, interval: str, limit: int):
@@ -77,12 +88,17 @@ def fetch(symbol: str, interval: str, limit: int):
     return klines_to_df(client.get_klines(symbol, interval, limit=limit))
 
 
-def run_single(symbol, interval, limit, name, params, fee_pct, trailing_pct=0.0):
+def run_single(symbol, interval, limit, name, params, fee_pct, trailing_pct=0.0,
+               risk_cfg=None):
     df = fetch(symbol, interval, limit)
     strat = load_strategy(name, params)
-    res = simulate(df, symbol, strat, fee_pct, trailing_pct)
+    res = simulate(df, symbol, strat, fee_pct, trailing_pct, risk_cfg)
     if trailing_pct:
         log.info("Trailing stop activo: %.2f%% por debajo del máximo.", trailing_pct * 100)
+    if risk_cfg is not None and risk_cfg.sizing != "fixed":
+        log.info("Sizing %s (%.2f%%) | capital inicial %.2f | equity final %.2f",
+                 risk_cfg.sizing, risk_cfg.sizing_pct * 100,
+                 risk_cfg.paper_balance, res["final_equity"])
     log.info("=== Backtest %s | %s %s (%d velas) ===", name, symbol, interval, len(df))
     log.info("Operaciones: %d | Ganadoras: %d (%.1f%%)", res["trades"], res["wins"], res["win_rate"])
     log.info("PnL total neto (aprox, USDT): %.4f", res["pnl"])
@@ -90,17 +106,21 @@ def run_single(symbol, interval, limit, name, params, fee_pct, trailing_pct=0.0)
              "Solo orientativo.", fee_pct * 100)
 
 
-def run_compare(symbol, interval, limit, fee_pct, trailing_pct=0.0):
+def run_compare(symbol, interval, limit, fee_pct, trailing_pct=0.0, risk_cfg=None):
     df = fetch(symbol, interval, limit)
     log.info("=== Comparativa de estrategias | %s %s (%d velas) ===", symbol, interval, len(df))
     if trailing_pct:
         log.info("Trailing stop activo: %.2f%% por debajo del máximo.", trailing_pct * 100)
+    if risk_cfg is not None and risk_cfg.sizing != "fixed":
+        log.info("Sizing %s (%.2f%%) | capital inicial %.2f",
+                 risk_cfg.sizing, risk_cfg.sizing_pct * 100, risk_cfg.paper_balance)
     log.info("%-14s %8s %8s %10s %12s", "estrategia", "ops", "aciertos", "% acierto", "PnL(USDT)")
     log.info("-" * 56)
     rows = []
     for name in STRATEGIES:
         strat = load_strategy(name, {})  # parámetros por defecto de cada una
-        res = simulate(df, symbol, strat, fee_pct, trailing_pct)
+        res = simulate(df, symbol, strat, fee_pct, trailing_pct,
+                       replace(risk_cfg) if risk_cfg is not None else None)
         rows.append((name, res))
     # Ordenar por PnL descendente.
     rows.sort(key=lambda r: r[1]["pnl"], reverse=True)
@@ -129,14 +149,27 @@ def main() -> None:
     p.add_argument("--trailing", type=float, default=0.0,
                    help="Trailing stop como fracción del máximo alcanzado "
                         "(0.015 = 1.5%%). 0 = stop fijo (por defecto).")
+    p.add_argument("--sizing", choices=["fixed", "balance_pct", "risk_pct"],
+                   default="fixed",
+                   help="Dimensionado: fixed (quote_per_trade), balance_pct "
+                        "(%% del balance) o risk_pct (riesgo fijo por operación).")
+    p.add_argument("--sizing-pct", type=float, default=0.0, dest="sizing_pct",
+                   help="Fracción para el sizing dinámico (0.1 = 10%%).")
+    p.add_argument("--balance", type=float, default=1000.0,
+                   help="Capital inicial simulado para el sizing dinámico.")
     args = p.parse_args()
 
+    risk_cfg = RiskConfig(sizing=args.sizing, sizing_pct=args.sizing_pct,
+                          paper_balance=args.balance)
+    validate_risk(risk_cfg)
+
     if args.compare:
-        run_compare(args.symbol, args.interval, args.limit, args.fee, args.trailing)
+        run_compare(args.symbol, args.interval, args.limit, args.fee, args.trailing,
+                    risk_cfg)
     else:
         params = json.loads(args.params)
         run_single(args.symbol, args.interval, args.limit, args.strategy, params,
-                   args.fee, args.trailing)
+                   args.fee, args.trailing, risk_cfg)
 
 
 if __name__ == "__main__":

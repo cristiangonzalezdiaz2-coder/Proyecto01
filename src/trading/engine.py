@@ -248,6 +248,27 @@ class TradingEngine:
                      len(self.risk.open_positions))
 
     # ------------------------------------------------------------------
+    def _available_quote(self) -> float | None:
+        """Balance (moneda cotizada) disponible para dimensionar una compra.
+
+        En live es el saldo libre real del exchange. En paper es el capital
+        simulado (paper_balance) más el PnL realizado del bot, menos lo ya
+        comprometido en posiciones abiertas. None si no se puede conocer."""
+        if self.live:
+            if self.symbol_info is None:
+                log.warning("[%s] Sin info del símbolo: sizing con quote_per_trade fijo.",
+                            self.name)
+                return None
+            try:
+                return self.client.get_balance(self.symbol_info.quote_asset)
+            except Exception as exc:  # noqa: BLE001
+                log.warning("[%s] No se pudo leer el balance para el sizing (%s); "
+                            "se usa quote_per_trade fijo.", self.name, exc)
+                return None
+        equity = self.bot.risk.paper_balance + self.store.fetch_bot_realized_pnl(self.name)
+        committed = sum(p.entry_price * p.quantity for p in self.risk.open_positions)
+        return max(equity - committed, 0.0)
+
     def _sellable_qty(self, qty: float) -> float:
         """(live) Limita una cantidad a vender al saldo libre real del activo base.
 
@@ -375,7 +396,13 @@ class TradingEngine:
 
     # ------------------------------------------------------------------
     def _market_buy(self, price: float) -> Position | None:
-        quote_amount = self.bot.risk.quote_per_trade
+        # Dimensionar la compra (fijo o dinámico según `sizing`).
+        if self.bot.risk.sizing == "fixed":
+            quote_amount = self.bot.risk.quote_per_trade
+        else:
+            quote_amount = self.risk.position_size(self._available_quote())
+            log.info("[%s] Sizing %s: importe %.2f", self.name,
+                     self.bot.risk.sizing, quote_amount)
 
         # Validar el importe contra el mínimo del exchange (si lo conocemos).
         if self.symbol_info is not None:
@@ -392,7 +419,7 @@ class TradingEngine:
             log.info("[%s] Compra omitida por riesgo global: %s", self.name, gerr)
             return None
 
-        position = self.risk.build_position(self.symbol, price)
+        position = self.risk.build_position(self.symbol, price, quote_amount)
         self._apply_precision(position)  # ajustar cantidad y precios
         slippage_note = ""
 
@@ -424,7 +451,7 @@ class TradingEngine:
                 slippage_pct = (fill_price / price - 1) * 100
                 # Reconstruir la posición con los datos reales de ejecución:
                 # SL/TP se recalculan desde el precio medio real de compra.
-                position = self.risk.build_position(self.symbol, fill_price)
+                position = self.risk.build_position(self.symbol, fill_price, quote_amount)
                 position.quantity = fill_qty
                 self._apply_precision(position)
                 price = fill_price

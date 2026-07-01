@@ -252,6 +252,13 @@ class PositionStore:
         ).fetchone()
         return float(row["exp"] or 0.0), int(row["n"] or 0)
 
+    def fetch_bot_realized_pnl(self, bot: str) -> float:
+        """PnL realizado acumulado de un bot (todas sus operaciones cerradas)."""
+        row = self._conn.execute(
+            "SELECT COALESCE(SUM(pnl), 0) AS s FROM trades WHERE bot = ?", (bot,)
+        ).fetchone()
+        return float(row["s"] or 0.0)
+
     def fetch_bots(self) -> list[str]:
         """Nombres de bots presentes en el historial o con posiciones abiertas."""
         rows = self._conn.execute(
