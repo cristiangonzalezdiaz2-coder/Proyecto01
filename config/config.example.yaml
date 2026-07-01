@@ -59,3 +59,33 @@ risk:
   max_daily_loss: 50.0
   # Número máximo de posiciones abiertas simultáneas.
   max_open_positions: 1
+
+# ============================================================
+#  MULTI-BOT (opcional)
+# ============================================================
+# Para correr varias estrategias/pares en paralelo, define una lista `bots`.
+# Cada bot hereda de la raíz (interval, poll_seconds, strategy, risk) lo que
+# no especifique. Si defines `bots`, se ignora la `strategy` de la raíz.
+# Cada bot guarda sus operaciones por separado (etiqueta `bot` en la BD) y
+# aparece desglosado en el dashboard.
+#
+# bots:
+#   - name: btc-tendencia          # nombre único (opcional; se genera si falta)
+#     symbol: BTCUSDT
+#     interval: 1h
+#     strategy:
+#       name: ma_crossover
+#       fast_period: 9
+#       slow_period: 21
+#     risk:
+#       quote_per_trade: 20.0
+#       max_open_positions: 1
+#   - name: eth-reversion
+#     symbol: ETHUSDT
+#     interval: 15m
+#     strategy:
+#       name: rsi
+#       period: 14
+#     risk:
+#       quote_per_trade: 15.0
+#       stop_loss_pct: 0.015

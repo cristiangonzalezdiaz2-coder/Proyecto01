@@ -73,10 +73,18 @@
       <div class="cards" id="metrics"></div>
     </section>
 
+    <section id="bots-section">
+      <h2>Rendimiento por bot</h2>
+      <table id="bots-table">
+        <thead><tr><th>Bot</th><th>Abiertas</th><th>Operaciones</th><th>% Acierto</th><th>Profit factor</th><th>Drawdown máx.</th><th>PnL</th></tr></thead>
+        <tbody></tbody>
+      </table>
+    </section>
+
     <section>
       <h2>Posiciones abiertas</h2>
       <table id="open-table">
-        <thead><tr><th>Símbolo</th><th>Entrada</th><th>Cantidad</th><th>Stop-loss</th><th>Take-profit</th><th>Abierta</th></tr></thead>
+        <thead><tr><th>Bot</th><th>Símbolo</th><th>Entrada</th><th>Cantidad</th><th>Stop-loss</th><th>Take-profit</th><th>Abierta</th></tr></thead>
         <tbody></tbody>
       </table>
     </section>
@@ -84,7 +92,7 @@
     <section>
       <h2>Historial de operaciones</h2>
       <table id="trades-table">
-        <thead><tr><th>Símbolo</th><th>Entrada</th><th>Salida</th><th>Cantidad</th><th>Motivo</th><th>PnL</th><th>Cerrada</th></tr></thead>
+        <thead><tr><th>Bot</th><th>Símbolo</th><th>Entrada</th><th>Salida</th><th>Cantidad</th><th>Motivo</th><th>PnL</th><th>Cerrada</th></tr></thead>
         <tbody></tbody>
       </table>
     </section>
@@ -220,13 +228,28 @@
         renderMetrics(data.metrics);
         drawEquity(data.equity_curve);
 
+        // Sección por bot: solo se muestra si hay más de uno.
+        const botsSection = document.getElementById("bots-section");
+        const bots = data.bots || [];
+        botsSection.style.display = bots.length > 1 ? "block" : "none";
+        fillTable("bots-table", bots, r => [
+          `<td><span class="pill">${r.name}</span></td>`,
+          `<td>${r.open_positions}</td>`, `<td>${r.total_trades}</td>`,
+          `<td>${fmt(r.win_rate, 1)}%</td>`,
+          `<td>${r.profit_factor === null ? "∞" : fmt(r.profit_factor, 2)}</td>`,
+          `<td class="neg">-${fmt(r.max_drawdown, 4)}</td>`,
+          `<td class="${cls(r.total_pnl)}">${sign(r.total_pnl)}</td>`,
+        ], "Sin datos por bot.");
+
         fillTable("open-table", data.open_positions, r => [
+          `<td><span class="pill">${r.bot || "—"}</span></td>`,
           `<td>${r.symbol}</td>`, `<td>${fmt(r.entry_price)}</td>`,
           `<td>${fmt(r.quantity, 6)}</td>`, `<td>${fmt(r.stop_loss)}</td>`,
           `<td>${fmt(r.take_profit)}</td>`, `<td>${shortTime(r.opened_at)}</td>`,
         ], "No hay posiciones abiertas.");
 
         fillTable("trades-table", data.trades, r => [
+          `<td><span class="pill">${r.bot || "—"}</span></td>`,
           `<td>${r.symbol}</td>`, `<td>${fmt(r.entry_price)}</td>`,
           `<td>${fmt(r.exit_price)}</td>`, `<td>${fmt(r.quantity, 6)}</td>`,
           `<td><span class="pill">${r.reason || "—"}</span></td>`,

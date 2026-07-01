@@ -2,7 +2,9 @@
 y estado diario (PnL y bloqueo por pérdida máxima).
 
 Permite que el bot se reinicie sin perder sus posiciones abiertas ni el
-progreso del límite de pérdida diaria. Usa solo la biblioteca estándar.
+progreso del límite de pérdida diaria. Cada fila lleva una etiqueta `bot` para
+que varios bots (símbolos/estrategias) compartan la misma base de datos sin
+mezclarse. Usa solo la biblioteca estándar.
 """
 import sqlite3
 from datetime import datetime, timezone
@@ -27,13 +29,18 @@ class PositionStore:
         # WAL permite que el dashboard lea mientras el bot escribe sin bloqueos.
         self._conn.execute("PRAGMA journal_mode=WAL")
         self._create_tables()
+        self._migrate()
         log.info("Persistencia activa en %s", db_path)
+
+    def _columns(self, table: str) -> set[str]:
+        return {r["name"] for r in self._conn.execute(f"PRAGMA table_info({table})")}
 
     def _create_tables(self) -> None:
         self._conn.executescript(
             """
             CREATE TABLE IF NOT EXISTS positions (
                 id          INTEGER PRIMARY KEY AUTOINCREMENT,
+                bot         TEXT    NOT NULL DEFAULT 'default',
                 symbol      TEXT    NOT NULL,
                 entry_price REAL    NOT NULL,
                 quantity    REAL    NOT NULL,
@@ -45,6 +52,7 @@ class PositionStore:
 
             CREATE TABLE IF NOT EXISTS trades (
                 id          INTEGER PRIMARY KEY AUTOINCREMENT,
+                bot         TEXT    NOT NULL DEFAULT 'default',
                 position_id INTEGER,
                 symbol      TEXT,
                 entry_price REAL,
@@ -57,51 +65,85 @@ class PositionStore:
             );
 
             CREATE TABLE IF NOT EXISTS daily_state (
-                day       TEXT    PRIMARY KEY,
+                bot       TEXT    NOT NULL DEFAULT 'default',
+                day       TEXT    NOT NULL,
                 daily_pnl REAL    NOT NULL,
-                halted    INTEGER NOT NULL
+                halted    INTEGER NOT NULL,
+                PRIMARY KEY (bot, day)
             );
             """
         )
         self._conn.commit()
 
+    def _migrate(self) -> None:
+        """Actualiza bases de datos antiguas (sin columna `bot`)."""
+        for table in ("positions", "trades"):
+            if "bot" not in self._columns(table):
+                self._conn.execute(
+                    f"ALTER TABLE {table} ADD COLUMN bot TEXT NOT NULL DEFAULT 'default'"
+                )
+                log.info("Migración: columna 'bot' añadida a %s.", table)
+
+        if "bot" not in self._columns("daily_state"):
+            # Reconstruir daily_state con clave compuesta (bot, day).
+            self._conn.executescript(
+                """
+                ALTER TABLE daily_state RENAME TO daily_state_old;
+                CREATE TABLE daily_state (
+                    bot       TEXT    NOT NULL DEFAULT 'default',
+                    day       TEXT    NOT NULL,
+                    daily_pnl REAL    NOT NULL,
+                    halted    INTEGER NOT NULL,
+                    PRIMARY KEY (bot, day)
+                );
+                INSERT INTO daily_state (bot, day, daily_pnl, halted)
+                    SELECT 'default', day, daily_pnl, halted FROM daily_state_old;
+                DROP TABLE daily_state_old;
+                """
+            )
+            log.info("Migración: daily_state ahora es por bot.")
+        self._conn.commit()
+
     # ------------------------- Posiciones -------------------------
-    def add_position(self, position: Position) -> int:
+    def add_position(self, position: Position, bot: str = "default") -> int:
         """Inserta una posición abierta y le asigna su id de base de datos."""
         cur = self._conn.execute(
             """INSERT INTO positions
-               (symbol, entry_price, quantity, stop_loss, take_profit, opened_at, status)
-               VALUES (?, ?, ?, ?, ?, ?, 'open')""",
-            (position.symbol, position.entry_price, position.quantity,
+               (bot, symbol, entry_price, quantity, stop_loss, take_profit, opened_at, status)
+               VALUES (?, ?, ?, ?, ?, ?, ?, 'open')""",
+            (bot, position.symbol, position.entry_price, position.quantity,
              position.stop_loss, position.take_profit, position.opened_at),
         )
         self._conn.commit()
         position.id = cur.lastrowid
         return position.id
 
-    def load_open_positions(self) -> list[Position]:
-        """Devuelve las posiciones que quedaron abiertas de una sesión anterior."""
-        rows = self._conn.execute(
-            "SELECT * FROM positions WHERE status = 'open' ORDER BY id"
-        ).fetchall()
-        positions = []
-        for r in rows:
-            positions.append(Position(
-                symbol=r["symbol"],
-                entry_price=r["entry_price"],
-                quantity=r["quantity"],
-                stop_loss=r["stop_loss"],
-                take_profit=r["take_profit"],
-                opened_at=r["opened_at"],
-                id=r["id"],
-            ))
+    def load_open_positions(self, bot: str | None = None) -> list[Position]:
+        """Posiciones abiertas de una sesión anterior. Si `bot` es None, todas."""
+        if bot is None:
+            rows = self._conn.execute(
+                "SELECT * FROM positions WHERE status = 'open' ORDER BY id"
+            ).fetchall()
+        else:
+            rows = self._conn.execute(
+                "SELECT * FROM positions WHERE status = 'open' AND bot = ? ORDER BY id",
+                (bot,),
+            ).fetchall()
+        positions = [
+            Position(
+                symbol=r["symbol"], entry_price=r["entry_price"], quantity=r["quantity"],
+                stop_loss=r["stop_loss"], take_profit=r["take_profit"],
+                opened_at=r["opened_at"], id=r["id"],
+            )
+            for r in rows
+        ]
         if positions:
-            log.info("Recuperadas %d posición(es) abierta(s) de la sesión anterior.",
-                     len(positions))
+            log.info("Recuperadas %d posición(es) abierta(s)%s.",
+                     len(positions), f" del bot {bot}" if bot else "")
         return positions
 
     def close_position(self, position: Position, exit_price: float,
-                       pnl: float, reason: str) -> None:
+                       pnl: float, reason: str, bot: str = "default") -> None:
         """Marca la posición como cerrada y guarda la operación en el historial."""
         closed_at = _now_iso()
         if position.id is not None:
@@ -110,26 +152,28 @@ class PositionStore:
             )
         self._conn.execute(
             """INSERT INTO trades
-               (position_id, symbol, entry_price, exit_price, quantity, pnl, reason, opened_at, closed_at)
-               VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?)""",
-            (position.id, position.symbol, position.entry_price, exit_price,
+               (bot, position_id, symbol, entry_price, exit_price, quantity, pnl, reason, opened_at, closed_at)
+               VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?)""",
+            (bot, position.id, position.symbol, position.entry_price, exit_price,
              position.quantity, pnl, reason, position.opened_at, closed_at),
         )
         self._conn.commit()
 
     # ------------------------- Estado diario -------------------------
-    def save_daily_state(self, day: str, daily_pnl: float, halted: bool) -> None:
+    def save_daily_state(self, day: str, daily_pnl: float, halted: bool,
+                         bot: str = "default") -> None:
         self._conn.execute(
-            """INSERT INTO daily_state (day, daily_pnl, halted) VALUES (?, ?, ?)
-               ON CONFLICT(day) DO UPDATE SET daily_pnl = excluded.daily_pnl,
-                                              halted    = excluded.halted""",
-            (day, daily_pnl, 1 if halted else 0),
+            """INSERT INTO daily_state (bot, day, daily_pnl, halted) VALUES (?, ?, ?, ?)
+               ON CONFLICT(bot, day) DO UPDATE SET daily_pnl = excluded.daily_pnl,
+                                                   halted    = excluded.halted""",
+            (bot, day, daily_pnl, 1 if halted else 0),
         )
         self._conn.commit()
 
-    def load_daily_state(self, day: str) -> tuple[float, bool] | None:
+    def load_daily_state(self, day: str, bot: str = "default") -> tuple[float, bool] | None:
         row = self._conn.execute(
-            "SELECT daily_pnl, halted FROM daily_state WHERE day = ?", (day,)
+            "SELECT daily_pnl, halted FROM daily_state WHERE bot = ? AND day = ?",
+            (bot, day),
         ).fetchone()
         if row is None:
             return None
@@ -155,9 +199,17 @@ class PositionStore:
 
     def fetch_daily_states(self, limit: int = 30) -> list[dict]:
         rows = self._conn.execute(
-            "SELECT * FROM daily_state ORDER BY day DESC LIMIT ?", (limit,)
+            "SELECT * FROM daily_state ORDER BY day DESC, bot ASC LIMIT ?", (limit,)
         ).fetchall()
         return [dict(r) for r in rows]
+
+    def fetch_bots(self) -> list[str]:
+        """Nombres de bots presentes en el historial o con posiciones abiertas."""
+        rows = self._conn.execute(
+            "SELECT DISTINCT bot FROM trades "
+            "UNION SELECT DISTINCT bot FROM positions ORDER BY bot"
+        ).fetchall()
+        return [r["bot"] for r in rows]
 
     def fetch_summary(self) -> dict:
         """Métricas globales calculadas sobre el historial de operaciones."""

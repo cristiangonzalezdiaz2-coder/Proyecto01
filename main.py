@@ -10,7 +10,7 @@ import sys
 from src.config import load_config
 from src.logger import get_logger
 from src.mexc import MexcSpotClient
-from src.trading import TradingEngine
+from src.trading import MultiRunner, TradingEngine
 
 log = get_logger("main")
 
@@ -20,19 +20,21 @@ def check_connection(cfg) -> int:
     try:
         client.ping()
         log.info("Conexión con MEXC: OK")
-        price = client.get_price(cfg.symbol)
-        log.info("Precio actual %s: %.2f", cfg.symbol, price)
 
-        info = client.get_symbol_info(cfg.symbol)
-        log.info("Precisión %s | cantidad: %d dec | precio: %d dec | "
-                 "mín. orden mercado: %s %s | trading: %s",
-                 info.symbol, info.base_precision, info.quote_precision,
-                 info.min_quote_amount_market, info.quote_asset,
-                 "permitido" if info.trading_allowed else "NO permitido")
-        if cfg.risk.quote_per_trade < info.min_quote_amount_market:
-            log.warning("quote_per_trade (%.2f) es menor que el mínimo de mercado "
-                        "(%.2f %s): las compras serían rechazadas.",
-                        cfg.risk.quote_per_trade, info.min_quote_amount_market, info.quote_asset)
+        # Comprobar cada bot configurado (par + precisión + mínimo).
+        for bot in cfg.bots:
+            price = client.get_price(bot.symbol)
+            info = client.get_symbol_info(bot.symbol)
+            log.info("[%s] %s @ %.2f | cantidad: %d dec | precio: %d dec | "
+                     "mín. mercado: %s %s | trading: %s | estrategia: %s",
+                     bot.name, bot.symbol, price, info.base_precision, info.quote_precision,
+                     info.min_quote_amount_market, info.quote_asset,
+                     "permitido" if info.trading_allowed else "NO permitido",
+                     bot.strategy.name)
+            if bot.risk.quote_per_trade < info.min_quote_amount_market:
+                log.warning("[%s] quote_per_trade (%.2f) < mínimo de mercado (%.2f %s): "
+                            "las compras serían rechazadas.", bot.name,
+                            bot.risk.quote_per_trade, info.min_quote_amount_market, info.quote_asset)
 
         if cfg.api_key and cfg.api_secret:
             usdt = client.get_balance("USDT")
@@ -79,8 +81,12 @@ def main() -> int:
     if cfg.trading_mode == "live":
         log.warning("=== MODO LIVE: se enviarán órdenes REALES a MEXC ===")
 
-    engine = TradingEngine(cfg)
-    engine.run()
+    if len(cfg.bots) == 1:
+        # Un solo bot: en el hilo principal (Ctrl+C directo).
+        TradingEngine(cfg, cfg.bots[0]).run()
+    else:
+        # Varios bots en paralelo, cada uno en su hilo.
+        MultiRunner(cfg).run()
     return 0
 
 

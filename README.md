@@ -14,6 +14,8 @@ modular preparada para añadir futuros más adelante. Incluye modo simulación
 - ✅ Modo **paper** (simulación) y **live** (órdenes reales).
 - ✅ Cuatro estrategias listas: cruce de medias, RSI, MACD y Bollinger
   (framework fácil de extender).
+- ✅ **Multi-bot**: varias estrategias/pares en paralelo, cada uno con su propio
+  riesgo y estado, desglosados en el dashboard.
 - ✅ **Ajuste de precisión por símbolo** (`exchangeInfo`): redondea cantidades
   y precios y valida el importe mínimo para que MEXC no rechace las órdenes.
 - ✅ Gestión de riesgo: stop-loss, take-profit, tamaño de posición, límite de
@@ -42,11 +44,11 @@ Proyecto01/
 │   ├── mexc/               # cliente de la API de MEXC
 │   ├── strategies/         # estrategias (ma_crossover, rsi, macd, bollinger)
 │   ├── risk/               # gestión de riesgo
+│   ├── trading/            # motor (engine) + runner multi-bot
 │   ├── persistence/        # almacenamiento en SQLite
 │   ├── notifications/      # notificaciones (Telegram)
 │   ├── analytics/          # métricas de rendimiento y curva de equity
-│   ├── dashboard/          # dashboard web Flask (solo lectura)
-│   └── trading/            # motor de ejecución (paper/live)
+│   └── dashboard/          # dashboard web Flask (solo lectura)
 └── tests/
 ```
 
@@ -164,6 +166,36 @@ python main.py --check
 Si MEXC no está accesible al arrancar, el bot lo avisa y sigue funcionando sin
 ajuste de precisión (útil en modo paper).
 
+## Multi-bot (varias estrategias/pares en paralelo)
+
+Puedes correr varios bots a la vez definiendo una lista `bots:` en
+`config.yaml` (ver ejemplo en `config/config.example.yaml`). Cada bot:
+
+- Opera **su propio par y estrategia**, con su propia gestión de riesgo.
+- Corre en **su propio hilo**; un `Ctrl+C` los detiene a todos de forma ordenada.
+- Guarda sus operaciones **separadas** en la base de datos (etiqueta `bot`), así
+  que el límite de pérdida diaria y las posiciones no se mezclan entre bots.
+- Aparece **desglosado en el dashboard** (sección "Rendimiento por bot") además
+  de en las métricas globales agregadas.
+
+Lo que no especifiques por bot (interval, poll_seconds, risk…) se hereda de la
+raíz del YAML. Si defines un solo bot (o usas el formato antiguo con `symbol` en
+la raíz), todo funciona igual que antes.
+
+```yaml
+bots:
+  - name: btc-tendencia
+    symbol: BTCUSDT
+    interval: 1h
+    strategy: { name: ma_crossover, fast_period: 9, slow_period: 21 }
+    risk: { quote_per_trade: 20.0 }
+  - name: eth-reversion
+    symbol: ETHUSDT
+    interval: 15m
+    strategy: { name: rsi, period: 14 }
+    risk: { quote_per_trade: 15.0 }
+```
+
 ## Persistencia (SQLite)
 
 El bot guarda su estado en una base de datos SQLite (`data/bot.db` por defecto,
@@ -220,6 +252,7 @@ pytest
 - [x] Notificaciones (Telegram) en cada operación.
 - [x] Dashboard web para ver posiciones e historial.
 - [x] Métricas avanzadas y curva de equity en el dashboard.
+- [x] Multi-bot: varias estrategias/pares en paralelo.
 - [x] Ajustar cantidades a la precisión (`exchangeInfo`) de cada símbolo.
 - [ ] Soporte de futuros cuando la cuenta lo permita.
 ```

@@ -31,11 +31,38 @@ def create_app(db_path: str = "data/bot.db") -> Flask:
         store = _store()
         try:
             all_trades = store.fetch_all_trades()
+            open_positions = store.fetch_open_positions()
+
+            # Desglose por bot: métricas independientes de cada uno.
+            open_by_bot: dict[str, int] = {}
+            for p in open_positions:
+                open_by_bot[p.get("bot", "default")] = open_by_bot.get(p.get("bot", "default"), 0) + 1
+
+            trades_by_bot: dict[str, list] = {}
+            for t in all_trades:
+                trades_by_bot.setdefault(t.get("bot", "default"), []).append(t)
+
+            bot_names = sorted(set(open_by_bot) | set(trades_by_bot))
+            bots = []
+            for name in bot_names:
+                bt = trades_by_bot.get(name, [])
+                m = compute_metrics(bt)
+                bots.append({
+                    "name": name,
+                    "open_positions": open_by_bot.get(name, 0),
+                    "total_trades": m["total_trades"],
+                    "win_rate": m["win_rate"],
+                    "total_pnl": m["total_pnl"],
+                    "profit_factor": m["profit_factor"],
+                    "max_drawdown": m["max_drawdown"],
+                })
+
             return jsonify({
                 "summary": store.fetch_summary(),
                 "metrics": compute_metrics(all_trades),
                 "equity_curve": equity_curve(all_trades),
-                "open_positions": store.fetch_open_positions(),
+                "bots": bots,
+                "open_positions": open_positions,
                 "trades": store.fetch_trades(limit=50),
                 "daily": store.fetch_daily_states(limit=14),
             })
