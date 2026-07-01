@@ -12,7 +12,8 @@ modular preparada para añadir futuros más adelante. Incluye modo simulación
 
 - ✅ Cliente REST de MEXC spot con firma HMAC-SHA256.
 - ✅ Modo **paper** (simulación) y **live** (órdenes reales).
-- ✅ Estrategia de ejemplo: cruce de medias móviles (fácil de reemplazar).
+- ✅ Cuatro estrategias listas: cruce de medias, RSI, MACD y Bollinger
+  (framework fácil de extender).
 - ✅ Gestión de riesgo: stop-loss, take-profit, tamaño de posición, límite de
   pérdida diaria y máximo de posiciones abiertas.
 - ✅ Backtesting con datos históricos reales.
@@ -64,9 +65,13 @@ Proyecto01/
    python main.py --check
    ```
 
-5. **Prueba la estrategia con datos históricos**:
+5. **Prueba las estrategias con datos históricos**:
    ```bash
-   python backtest.py --symbol BTCUSDT --interval 1h --limit 500
+   # Comparar TODAS las estrategias sobre los mismos datos:
+   python backtest.py --compare --symbol BTCUSDT --interval 1h --limit 1000
+
+   # Probar una estrategia concreta con sus parámetros:
+   python backtest.py --strategy rsi --params '{"period": 14}'
    ```
 
 6. **Ejecuta en modo simulación** (por defecto `TRADING_MODE=paper`):
@@ -114,6 +119,22 @@ cuentas retail. Antes de desarrollar esa parte conviene verificar qué permite t
 cuenta. La arquitectura actual (cliente base + cliente spot) está pensada para
 añadir un `MexcFuturesClient` cuando se confirme el acceso.
 
+## Estrategias disponibles
+
+Se selecciona con `strategy.name` en `config.yaml`. Cada una tiene sus propios
+parámetros (ver `config/config.example.yaml`).
+
+| Nombre | Tipo | Idea | Parámetros |
+|---|---|---|---|
+| `ma_crossover` | Tendencia | Cruce de medias móviles rápida/lenta | `fast_period`, `slow_period` |
+| `rsi` | Reversión | Compra al salir de sobreventa, vende al salir de sobrecompra | `period`, `oversold`, `overbought` |
+| `macd` | Momentum | Cruce de la línea MACD sobre su señal | `fast`, `slow`, `signal` |
+| `bollinger` | Volatilidad | Compra/vende cuando el precio rompe las bandas | `period`, `num_std` |
+
+Usa `python backtest.py --compare` para ver cuál rinde mejor en un par e
+intervalo concretos antes de elegir. Puedes añadir la tuya creando una clase que
+herede de `Strategy` en `src/strategies/` y registrándola en `STRATEGIES`.
+
 ## Persistencia (SQLite)
 
 El bot guarda su estado en una base de datos SQLite (`data/bot.db` por defecto,
@@ -141,7 +162,8 @@ pytest
 
 ## Próximos pasos sugeridos
 
-- [ ] Añadir más estrategias (RSI, MACD, grid, DCA).
+- [x] Añadir más estrategias (RSI, MACD, Bollinger).
+- [ ] Estrategias de grid trading y DCA.
 - [x] Persistir el estado de las posiciones (SQLite) para reinicios.
 - [x] Notificaciones (Telegram) en cada operación.
 - [ ] Ajustar cantidades a la precisión (`exchangeInfo`) de cada símbolo.

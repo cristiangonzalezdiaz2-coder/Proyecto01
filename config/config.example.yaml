@@ -18,10 +18,33 @@ poll_seconds: 60
 db_path: data/bot.db
 
 # ---------------- Estrategia ----------------
+# Estrategias disponibles y sus parámetros (deja solo un bloque activo):
+#
+#   ma_crossover:  fast_period, slow_period        (cruce de medias)
+#   rsi:           period, oversold, overbought    (reversión a la media)
+#   macd:          fast, slow, signal              (momentum)
+#   bollinger:     period, num_std                 (reversión por volatilidad)
+#
 strategy:
   name: ma_crossover          # nombre de la estrategia a cargar
   fast_period: 9              # media móvil rápida
   slow_period: 21             # media móvil lenta
+
+# Ejemplos de las otras estrategias (comenta el bloque de arriba y usa uno):
+# strategy:
+#   name: rsi
+#   period: 14
+#   oversold: 30
+#   overbought: 70
+# strategy:
+#   name: macd
+#   fast: 12
+#   slow: 26
+#   signal: 9
+# strategy:
+#   name: bollinger
+#   period: 20
+#   num_std: 2.0
 
 # ---------------- Gestión de riesgo ----------------
 risk:
