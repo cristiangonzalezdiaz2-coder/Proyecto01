@@ -22,6 +22,9 @@ modular preparada para añadir futuros más adelante. Incluye modo simulación
   que el optimizador no vio (out-of-sample), para evitar el sobreajuste.
 - ✅ **Ajuste de precisión por símbolo** (`exchangeInfo`): redondea cantidades
   y precios y valida el importe mínimo para que MEXC no rechace las órdenes.
+- ✅ **Fills reales en modo live**: la posición se registra con el precio medio
+  y la cantidad realmente ejecutados (no con el precio de la vela), el PnL se
+  calcula con el precio real de salida y se mide el slippage de cada orden.
 - ✅ Gestión de riesgo: stop-loss, take-profit, tamaño de posición, límite de
   pérdida diaria y máximo de posiciones abiertas.
 - ✅ Backtesting con datos históricos reales.

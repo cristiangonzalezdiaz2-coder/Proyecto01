@@ -81,6 +81,13 @@ class MexcSpotClient(MexcBaseClient):
             params["price"] = price
         return self.post("/api/v3/order", params, signed=True)
 
+    def query_order(self, symbol: str, order_id: str) -> dict:
+        """Consulta el estado de una orden (incluye executedQty y
+        cummulativeQuoteQty, necesarios para conocer el fill real)."""
+        return self.get(
+            "/api/v3/order", {"symbol": symbol, "orderId": order_id}, signed=True
+        )
+
     def cancel_order(self, symbol: str, order_id: str) -> dict:
         return self.delete(
             "/api/v3/order", {"symbol": symbol, "orderId": order_id}, signed=True

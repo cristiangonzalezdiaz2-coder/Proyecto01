@@ -16,7 +16,7 @@ import pandas as pd
 
 from ..config import AppConfig, BotConfig, GlobalRiskConfig
 from ..logger import get_logger
-from ..mexc import MexcSpotClient
+from ..mexc import MexcError, MexcSpotClient
 from ..notifications import TelegramNotifier
 from ..persistence import PositionStore
 from ..risk import GlobalRiskManager, Position, RiskManager
@@ -27,6 +27,38 @@ log = get_logger("engine")
 
 def _today_str() -> str:
     return datetime.now(timezone.utc).date().isoformat()
+
+
+def resolve_order_fill(client: MexcSpotClient, symbol: str, resp: dict,
+                       attempts: int = 5, delay: float = 0.5) -> tuple[float, float] | None:
+    """Obtiene el fill real de una orden: (precio medio, cantidad ejecutada).
+
+    Primero mira la respuesta inmediata de la orden; si aún no trae los campos
+    de ejecución (las órdenes MARKET de MEXC pueden responder antes de
+    ejecutarse), consulta la orden hasta `attempts` veces. Devuelve None si no
+    se pudo determinar el fill: el llamador debe usar su estimación y avisar.
+    """
+    def _parse(data: dict) -> tuple[float, float] | None:
+        try:
+            qty = float(data.get("executedQty") or 0)
+            quote = float(data.get("cummulativeQuoteQty") or 0)
+        except (TypeError, ValueError):
+            return None
+        if qty > 0 and quote > 0:
+            return quote / qty, qty
+        return None
+
+    fill = _parse(resp)
+    order_id = resp.get("orderId")
+    for _ in range(attempts):
+        if fill is not None or order_id is None:
+            break
+        time.sleep(delay)
+        try:
+            fill = _parse(client.query_order(symbol, order_id))
+        except MexcError as exc:
+            log.warning("No se pudo consultar la orden %s de %s: %s", order_id, symbol, exc)
+    return fill
 
 
 def klines_to_df(raw: list[list]) -> pd.DataFrame:
@@ -130,6 +162,7 @@ class TradingEngine:
 
         position = self.risk.build_position(self.symbol, price)
         self._apply_precision(position)  # ajustar cantidad y precios
+        slippage_note = ""
 
         if self.live:
             resp = self.client.new_order(
@@ -139,6 +172,23 @@ class TradingEngine:
                 quote_order_qty=quote_amount,
             )
             log.info("[%s] Orden BUY real enviada: %s", self.name, resp)
+            fill = resolve_order_fill(self.client, self.symbol, resp)
+            if fill is None:
+                log.warning("[%s] La orden BUY no reporta ejecución; la posición se "
+                            "registra con el precio de la vela (%.2f) como estimación.",
+                            self.name, price)
+            else:
+                fill_price, fill_qty = fill
+                slippage_pct = (fill_price / price - 1) * 100
+                # Reconstruir la posición con los datos reales de ejecución:
+                # SL/TP se recalculan desde el precio medio real de compra.
+                position = self.risk.build_position(self.symbol, fill_price)
+                position.quantity = fill_qty
+                self._apply_precision(position)
+                price = fill_price
+                slippage_note = f"\nSlippage: {slippage_pct:+.4f}%"
+                log.info("[%s] Fill real BUY: %.8f @ %.8f | slippage=%+.4f%%",
+                         self.name, fill_qty, fill_price, slippage_pct)
         else:
             log.info("[%s] [PAPER] Compra simulada %.8f @ %.2f (SL %.2f / TP %.2f)",
                      self.name, position.quantity, price, position.stop_loss, position.take_profit)
@@ -152,10 +202,13 @@ class TradingEngine:
             f"Cantidad: {position.quantity:.8f}\n"
             f"Stop-loss: {position.stop_loss:.2f}\n"
             f"Take-profit: {position.take_profit:.2f}"
+            f"{slippage_note}"
         )
         return position
 
     def _market_sell(self, position: Position, price: float, reason: str) -> None:
+        exit_price = price
+        slippage_note = ""
         if self.live:
             # Ajustar la cantidad a la precisión del símbolo antes de vender.
             sell_qty = position.quantity
@@ -172,13 +225,24 @@ class TradingEngine:
                 quantity=sell_qty,
             )
             log.info("[%s] Orden SELL real enviada (%s): %s", self.name, reason, resp)
-        pnl = self.risk.register_close(position, price)
+            fill = resolve_order_fill(self.client, self.symbol, resp)
+            if fill is None:
+                log.warning("[%s] La orden SELL no reporta ejecución; el PnL se "
+                            "calcula con el precio de la vela (%.2f).", self.name, price)
+            else:
+                fill_price, _fill_qty = fill
+                slippage_pct = (fill_price / price - 1) * 100
+                exit_price = fill_price
+                slippage_note = f"\nSlippage: {slippage_pct:+.4f}%"
+                log.info("[%s] Fill real SELL: @ %.8f | slippage=%+.4f%%",
+                         self.name, fill_price, slippage_pct)
+        pnl = self.risk.register_close(position, exit_price)
         self.global_risk.register_close(position, pnl)  # actualizar el riesgo global
         # Persistir el cierre y el nuevo estado diario.
-        self.store.close_position(position, price, pnl, reason, bot=self.name)
+        self.store.close_position(position, exit_price, pnl, reason, bot=self.name)
         self.store.save_daily_state(_today_str(), self.risk.daily_pnl, self.risk.halted, bot=self.name)
         log.info("[%s] [%s] Cierre por %s @ %.2f | PnL=%.4f | PnL diario=%.4f",
-                 self.name, "LIVE" if self.live else "PAPER", reason, price, pnl, self.risk.daily_pnl)
+                 self.name, "LIVE" if self.live else "PAPER", reason, exit_price, pnl, self.risk.daily_pnl)
 
         emoji = "✅" if pnl >= 0 else "🔴"
         reasons_es = {
@@ -190,9 +254,10 @@ class TradingEngine:
             f"{emoji} <b>VENTA</b> [{self.name}] ({self.mode_label})\n"
             f"{self.symbol}\n"
             f"Motivo: {reasons_es.get(reason, reason)}\n"
-            f"Precio: <b>{price:.2f}</b>\n"
+            f"Precio: <b>{exit_price:.2f}</b>\n"
             f"PnL operación: <b>{pnl:+.4f}</b>\n"
             f"PnL del día: {self.risk.daily_pnl:+.4f}"
+            f"{slippage_note}"
         )
 
         if self.risk.halted:
