@@ -148,6 +148,11 @@ class PositionStore:
         ).fetchall()
         return [dict(r) for r in rows]
 
+    def fetch_all_trades(self) -> list[dict]:
+        """Todas las operaciones cerradas en orden cronológico ascendente."""
+        rows = self._conn.execute("SELECT * FROM trades ORDER BY id ASC").fetchall()
+        return [dict(r) for r in rows]
+
     def fetch_daily_states(self, limit: int = 30) -> list[dict]:
         rows = self._conn.execute(
             "SELECT * FROM daily_state ORDER BY day DESC LIMIT ?", (limit,)

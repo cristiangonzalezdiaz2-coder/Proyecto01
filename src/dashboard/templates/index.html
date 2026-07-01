@@ -38,6 +38,9 @@
     .dot { height:8px; width:8px; border-radius:50%; background:var(--green);
            display:inline-block; margin-right:6px; animation: pulse 2s infinite; }
     @keyframes pulse { 0%,100%{opacity:1} 50%{opacity:.3} }
+    .chart-card { padding: 12px; }
+    #equity-chart { width: 100%; display: block; }
+    .card .sub { font-size: 12px; color: var(--muted); margin-top: 4px; }
   </style>
 </head>
 <body>
@@ -54,6 +57,21 @@
     {% endif %}
 
     <div class="cards" id="cards"></div>
+
+    <section>
+      <h2>Curva de equity (PnL acumulado)</h2>
+      <div class="card chart-card">
+        <canvas id="equity-chart" height="260"></canvas>
+        <div id="chart-empty" class="empty" style="display:none">
+          Aún no hay operaciones para dibujar la curva.
+        </div>
+      </div>
+    </section>
+
+    <section>
+      <h2>Métricas avanzadas</h2>
+      <div class="cards" id="metrics"></div>
+    </section>
 
     <section>
       <h2>Posiciones abiertas</h2>
@@ -100,6 +118,90 @@
       ).join("");
     }
 
+    function renderMetrics(m) {
+      const pf = (m.profit_factor === null) ? "∞" : fmt(m.profit_factor, 2);
+      const streak = m.current_streak > 0 ? `+${m.current_streak} ✅`
+                    : (m.current_streak < 0 ? `${m.current_streak} 🔴` : "—");
+      const cards = [
+        ["Profit factor", pf, "", "ganancia bruta / pérdida bruta"],
+        ["Expectancy", sign(m.expectancy), cls(m.expectancy), "PnL medio por operación"],
+        ["Drawdown máx.", "-" + fmt(m.max_drawdown, 4), "neg", fmt(m.max_drawdown_pct, 1) + "% desde el pico"],
+        ["Mejor / Peor", `${sign(m.best_trade)} / ${sign(m.worst_trade)}`, "", "operación individual"],
+        ["Ganancia media", sign(m.avg_win), "pos", "por operación ganadora"],
+        ["Pérdida media", sign(m.avg_loss), "neg", "por operación perdedora"],
+        ["Sharpe (por op.)", fmt(m.sharpe, 2), cls(m.sharpe), "media / desviación típica"],
+        ["Racha actual", streak, "", "ganadoras/perdedoras seguidas"],
+      ];
+      document.getElementById("metrics").innerHTML = cards.map(([l, v, c, sub]) =>
+        `<div class="card"><div class="label">${l}</div>` +
+        `<div class="value ${c}">${v}</div><div class="sub">${sub}</div></div>`
+      ).join("");
+    }
+
+    function drawEquity(curve) {
+      const canvas = document.getElementById("equity-chart");
+      const empty = document.getElementById("chart-empty");
+      // Solo el punto base (0) => no hay operaciones aún.
+      if (!curve || curve.length < 2) {
+        canvas.style.display = "none"; empty.style.display = "block"; return;
+      }
+      canvas.style.display = "block"; empty.style.display = "none";
+
+      // Ajuste a resolución del dispositivo para que se vea nítido.
+      const dpr = window.devicePixelRatio || 1;
+      const W = canvas.clientWidth, H = 260;
+      canvas.width = W * dpr; canvas.height = H * dpr;
+      const ctx = canvas.getContext("2d");
+      ctx.scale(dpr, dpr);
+      ctx.clearRect(0, 0, W, H);
+
+      const pad = { l: 56, r: 12, t: 14, b: 22 };
+      const vals = curve.map(p => p.equity);
+      let min = Math.min(0, ...vals), max = Math.max(0, ...vals);
+      if (min === max) { max += 1; min -= 1; }
+      const plotW = W - pad.l - pad.r, plotH = H - pad.t - pad.b;
+      const x = i => pad.l + (i / (curve.length - 1)) * plotW;
+      const y = v => pad.t + (1 - (v - min) / (max - min)) * plotH;
+
+      // Rejilla y etiquetas del eje Y (5 líneas).
+      ctx.font = "11px -apple-system, sans-serif";
+      ctx.textAlign = "right"; ctx.textBaseline = "middle";
+      for (let k = 0; k <= 4; k++) {
+        const v = min + (max - min) * k / 4;
+        const yy = y(v);
+        ctx.strokeStyle = "#2b323c"; ctx.lineWidth = 1;
+        ctx.beginPath(); ctx.moveTo(pad.l, yy); ctx.lineTo(W - pad.r, yy); ctx.stroke();
+        ctx.fillStyle = "#8b949e"; ctx.fillText(v.toFixed(2), pad.l - 8, yy);
+      }
+      // Línea de cero destacada.
+      if (min < 0 && max > 0) {
+        ctx.strokeStyle = "#586069"; ctx.setLineDash([4, 4]);
+        ctx.beginPath(); ctx.moveTo(pad.l, y(0)); ctx.lineTo(W - pad.r, y(0)); ctx.stroke();
+        ctx.setLineDash([]);
+      }
+
+      // Relleno bajo la curva.
+      const lastEquity = vals[vals.length - 1];
+      const lineColor = lastEquity >= 0 ? "#2ea043" : "#f85149";
+      const grad = ctx.createLinearGradient(0, pad.t, 0, pad.t + plotH);
+      grad.addColorStop(0, lineColor + "55");
+      grad.addColorStop(1, lineColor + "00");
+      ctx.beginPath();
+      curve.forEach((p, i) => i ? ctx.lineTo(x(i), y(p.equity)) : ctx.moveTo(x(i), y(p.equity)));
+      ctx.lineTo(x(curve.length - 1), y(min)); ctx.lineTo(x(0), y(min)); ctx.closePath();
+      ctx.fillStyle = grad; ctx.fill();
+
+      // La curva.
+      ctx.beginPath();
+      curve.forEach((p, i) => i ? ctx.lineTo(x(i), y(p.equity)) : ctx.moveTo(x(i), y(p.equity)));
+      ctx.strokeStyle = lineColor; ctx.lineWidth = 2; ctx.stroke();
+
+      // Punto final.
+      ctx.fillStyle = lineColor;
+      ctx.beginPath();
+      ctx.arc(x(curve.length - 1), y(lastEquity), 3.5, 0, Math.PI * 2); ctx.fill();
+    }
+
     function fillTable(id, rows, cols, emptyMsg) {
       const tbody = document.querySelector(`#${id} tbody`);
       if (!rows.length) {
@@ -115,6 +217,8 @@
         const res = await fetch("/api/state");
         const data = await res.json();
         renderCards(data.summary);
+        renderMetrics(data.metrics);
+        drawEquity(data.equity_curve);
 
         fillTable("open-table", data.open_positions, r => [
           `<td>${r.symbol}</td>`, `<td>${fmt(r.entry_price)}</td>`,

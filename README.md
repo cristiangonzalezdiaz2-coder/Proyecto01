@@ -21,7 +21,8 @@ modular preparada para añadir futuros más adelante. Incluye modo simulación
 - ✅ Backtesting con datos históricos reales.
 - ✅ Notificaciones por **Telegram** en cada operación (opcional).
 - ✅ **Persistencia en SQLite**: sobrevive a reinicios sin perder posiciones.
-- ✅ **Dashboard web** (solo lectura) para ver posiciones, historial y PnL.
+- ✅ **Dashboard web** (solo lectura) con curva de equity y métricas avanzadas
+  (drawdown, profit factor, expectancy, Sharpe, rachas…).
 - ✅ Logging a consola y archivo.
 
 ## Estructura
@@ -43,6 +44,7 @@ Proyecto01/
 │   ├── risk/               # gestión de riesgo
 │   ├── persistence/        # almacenamiento en SQLite
 │   ├── notifications/      # notificaciones (Telegram)
+│   ├── analytics/          # métricas de rendimiento y curva de equity
 │   ├── dashboard/          # dashboard web Flask (solo lectura)
 │   └── trading/            # motor de ejecución (paper/live)
 └── tests/
@@ -183,8 +185,13 @@ Tablas:
 ## Dashboard web
 
 Un panel de **solo lectura** que lee la misma base de datos SQLite y muestra
-posiciones abiertas, historial de operaciones y estadísticas (PnL, % de acierto).
-Se actualiza solo cada 5 segundos. No ejecuta órdenes ni modifica nada.
+posiciones abiertas, historial de operaciones y estadísticas. Se actualiza solo
+cada 5 segundos. No ejecuta órdenes ni modifica nada. Incluye:
+
+- **Curva de equity** (PnL acumulado) dibujada en canvas, sin librerías externas.
+- **Métricas avanzadas**: profit factor, expectancy, drawdown máximo (abs. y %),
+  mejor/peor operación, ganancia/pérdida media, ratio de Sharpe por operación y
+  racha actual (ganadoras/perdedoras seguidas).
 
 ```bash
 python dashboard.py                 # http://127.0.0.1:8000
@@ -212,6 +219,7 @@ pytest
 - [x] Persistir el estado de las posiciones (SQLite) para reinicios.
 - [x] Notificaciones (Telegram) en cada operación.
 - [x] Dashboard web para ver posiciones e historial.
+- [x] Métricas avanzadas y curva de equity en el dashboard.
 - [x] Ajustar cantidades a la precisión (`exchangeInfo`) de cada símbolo.
 - [ ] Soporte de futuros cuando la cuenta lo permita.
 ```

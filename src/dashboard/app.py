@@ -8,6 +8,7 @@ from pathlib import Path
 
 from flask import Flask, jsonify, render_template
 
+from ..analytics import compute_metrics, equity_curve
 from ..persistence import PositionStore
 
 
@@ -29,8 +30,11 @@ def create_app(db_path: str = "data/bot.db") -> Flask:
         """Devuelve todo el estado en JSON para que la página lo refresque."""
         store = _store()
         try:
+            all_trades = store.fetch_all_trades()
             return jsonify({
                 "summary": store.fetch_summary(),
+                "metrics": compute_metrics(all_trades),
+                "equity_curve": equity_curve(all_trades),
                 "open_positions": store.fetch_open_positions(),
                 "trades": store.fetch_trades(limit=50),
                 "daily": store.fetch_daily_states(limit=14),
