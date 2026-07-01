@@ -49,7 +49,9 @@ modular preparada para añadir futuros más adelante. Incluye modo simulación
   cada una se evalúa una única vez (igual que en el backtest).
 - ✅ Gestión de riesgo: stop-loss, take-profit, tamaño de posición, límite de
   pérdida diaria y máximo de posiciones abiertas.
-- ✅ Backtesting con datos históricos reales.
+- ✅ Backtesting con datos históricos reales y **salidas intra-vela**: los
+  SL/TP se evalúan contra el high/low de cada vela (si una vela toca ambos,
+  gana el stop) y los gaps se ejecutan al precio de apertura.
 - ✅ Notificaciones por **Telegram** en cada operación (opcional).
 - ✅ **Persistencia en SQLite**: sobrevive a reinicios sin perder posiciones.
 - ✅ **Dashboard web** (solo lectura) con curva de equity y métricas avanzadas

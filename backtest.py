@@ -35,12 +35,17 @@ def simulate(df, symbol: str, strategy, fee_pct: float | None = None) -> dict:
 
     for i in range(1, len(df)):
         window = df.iloc[: i + 1]
-        price = float(window["close"].iloc[-1])
+        candle = window.iloc[-1]
+        price = float(candle["close"])
 
-        # Salidas por stop-loss / take-profit.
+        # Salidas por SL/TP contra el RANGO de la vela (high/low), no solo el
+        # cierre: los stops tocados dentro de la vela también cuentan.
         for pos in list(risk.open_positions):
-            if risk.should_close(pos, price):
-                pnl = risk.register_close(pos, price)
+            exit_ = risk.check_candle_exit(pos, float(candle["open"]),
+                                           float(candle["high"]), float(candle["low"]))
+            if exit_:
+                _reason, exit_price = exit_
+                pnl = risk.register_close(pos, exit_price)
                 trades += 1
                 wins += 1 if pnl > 0 else 0
 

@@ -59,11 +59,31 @@ class RiskManager:
         self.open_positions.append(position)
 
     def should_close(self, position: Position, current_price: float) -> str | None:
-        """Devuelve 'stop_loss', 'take_profit' o None."""
+        """Devuelve 'stop_loss', 'take_profit' o None (para el bot en vivo,
+        que evalúa contra el precio actual en cada ciclo)."""
         if current_price <= position.stop_loss:
             return "stop_loss"
         if current_price >= position.take_profit:
             return "take_profit"
+        return None
+
+    def check_candle_exit(self, position: Position, open_: float,
+                          high: float, low: float) -> tuple[str, float] | None:
+        """Evalúa SL/TP contra el RANGO de una vela (para backtesting).
+
+        Mirar solo el cierre ignora los stops y TPs tocados dentro de la vela
+        e infla los resultados. Devuelve (motivo, precio_de_salida) o None.
+
+        Convenciones (conservadoras):
+          - Si la vela toca el stop y el take-profit, gana el stop.
+          - Gap bajista: si la vela abre por debajo del stop, se sale al precio
+            de apertura (peor que el stop), como haría una orden de mercado.
+          - Gap alcista: si abre por encima del TP, la venta LIMIT se ejecuta
+            a la apertura (mejor que el TP)."""
+        if low <= position.stop_loss:
+            return "stop_loss", min(open_, position.stop_loss)
+        if high >= position.take_profit:
+            return "take_profit", max(open_, position.take_profit)
         return None
 
     def trade_fees(self, position: Position, exit_price: float) -> float:
