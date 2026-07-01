@@ -25,6 +25,9 @@ modular preparada para añadir futuros más adelante. Incluye modo simulación
 - ✅ **Fills reales en modo live**: la posición se registra con el precio medio
   y la cantidad realmente ejecutados (no con el precio de la vela), el PnL se
   calcula con el precio real de salida y se mide el slippage de cada orden.
+- ✅ **Señales solo con velas cerradas**: la vela en formación se usa para el
+  precio actual y los SL/TP, pero las estrategias solo ven velas cerradas y
+  cada una se evalúa una única vez (igual que en el backtest).
 - ✅ Gestión de riesgo: stop-loss, take-profit, tamaño de posición, límite de
   pérdida diaria y máximo de posiciones abiertas.
 - ✅ Backtesting con datos históricos reales.

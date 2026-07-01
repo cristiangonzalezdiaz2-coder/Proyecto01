@@ -90,6 +90,10 @@ class TradingEngine:
         # Precisión y mínimos del símbolo (para no enviar órdenes inválidas).
         self.symbol_info = self._load_symbol_info()
 
+        # open_time de la última vela CERRADA ya evaluada por la estrategia
+        # (cada vela se evalúa una sola vez, aunque el poll sea más frecuente).
+        self._last_signal_candle = None
+
         # Restaurar estado de una sesión anterior (posiciones abiertas + PnL diario).
         self._restore_state()
 
@@ -273,16 +277,30 @@ class TradingEngine:
         """Un ciclo: obtener datos, evaluar salidas y luego entradas."""
         raw = self.client.get_klines(self.symbol, self.bot.interval, limit=200)
         df = klines_to_df(raw)
-        price = float(df["close"].iloc[-1])
+        price = float(df["close"].iloc[-1])  # precio actual (vela en formación)
 
-        # 1) Revisar salidas de posiciones abiertas (SL/TP).
+        # 1) Revisar salidas de posiciones abiertas (SL/TP) con el precio actual.
         for position in list(self.risk.open_positions):
             reason = self.risk.should_close(position, price)
             if reason:
                 self._market_sell(position, price, reason)
 
-        # 2) Evaluar la estrategia para nuevas entradas.
-        signal = self.strategy.generate_signal(df)
+        # 2) Evaluar la estrategia SOLO con velas cerradas: la última vela de
+        #    MEXC es la que está en formación y sus señales pueden deshacerse
+        #    antes del cierre (así, además, live coincide con el backtest).
+        #    Cada vela cerrada se evalúa una única vez para no repetir la
+        #    misma señal en cada poll dentro del mismo intervalo.
+        closed = df.iloc[:-1]
+        if len(closed) == 0:
+            return
+        candle_id = closed["open_time"].iloc[-1]
+        if candle_id == self._last_signal_candle:
+            log.info("[%s] Precio=%.2f | posiciones=%d | esperando cierre de vela",
+                     self.name, price, len(self.risk.open_positions))
+            return
+        self._last_signal_candle = candle_id
+
+        signal = self.strategy.generate_signal(closed)
         log.info("[%s] Precio=%.2f | señal=%s | posiciones=%d",
                  self.name, price, signal.value, len(self.risk.open_positions))
 
