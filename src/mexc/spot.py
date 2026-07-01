@@ -2,6 +2,7 @@
 from typing import Any
 
 from .client import MexcBaseClient
+from .symbol_info import SymbolInfo
 
 
 class MexcSpotClient(MexcBaseClient):
@@ -32,6 +33,10 @@ class MexcSpotClient(MexcBaseClient):
     def exchange_info(self, symbol: str) -> dict:
         """Reglas de trading del símbolo (precisión, mínimos, etc.)."""
         return self.get("/api/v3/exchangeInfo", {"symbol": symbol})
+
+    def get_symbol_info(self, symbol: str) -> SymbolInfo:
+        """Precisión y mínimos del símbolo, ya parseados."""
+        return SymbolInfo.from_exchange_info(self.exchange_info(symbol), symbol)
 
     # -------------------- Privados (firmados) --------------------
     def account(self) -> dict:

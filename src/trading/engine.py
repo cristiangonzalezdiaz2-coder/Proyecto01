@@ -43,6 +43,9 @@ class TradingEngine:
         self.notifier = TelegramNotifier(config.telegram_token, config.telegram_chat_id)
         self.store = PositionStore(config.db_path)
 
+        # Precisión y mínimos del símbolo (para no enviar órdenes inválidas).
+        self.symbol_info = self._load_symbol_info()
+
         # Restaurar estado de una sesión anterior (posiciones abiertas + PnL diario).
         self._restore_state()
 
@@ -59,6 +62,32 @@ class TradingEngine:
         )
 
     # ------------------------------------------------------------------
+    def _load_symbol_info(self):
+        """Obtiene la precisión del símbolo. Si falla (p. ej. sin red), el bot
+        sigue funcionando sin ajuste de precisión (solo se avisa)."""
+        try:
+            info = self.client.get_symbol_info(self.config.symbol)
+            log.info("Precisión %s | cantidad: %d dec | precio: %d dec | "
+                     "mín. mercado: %s %s | mín. base: %s",
+                     info.symbol, info.base_precision, info.quote_precision,
+                     info.min_quote_amount_market, info.quote_asset, info.min_base_size)
+            if not info.trading_allowed:
+                log.warning("El par %s no admite trading spot ahora mismo.", info.symbol)
+            return info
+        except Exception as exc:  # noqa: BLE001
+            log.warning("No se pudo cargar la precisión de %s (%s). "
+                        "Se opera sin ajuste de precisión.", self.config.symbol, exc)
+            return None
+
+    def _apply_precision(self, position: Position) -> None:
+        """Ajusta cantidad y precios de la posición a la precisión del símbolo."""
+        if self.symbol_info is None:
+            return
+        position.quantity = self.symbol_info.floor_quantity(position.quantity)
+        position.stop_loss = self.symbol_info.round_price(position.stop_loss)
+        position.take_profit = self.symbol_info.round_price(position.take_profit)
+
+    # ------------------------------------------------------------------
     def _restore_state(self) -> None:
         """Carga posiciones abiertas y el estado diario desde la base de datos."""
         self.risk.open_positions = self.store.load_open_positions()
@@ -70,18 +99,30 @@ class TradingEngine:
                      self.risk.daily_pnl, self.risk.halted)
 
     # ------------------------------------------------------------------
-    def _market_buy(self, price: float) -> Position:
+    def _market_buy(self, price: float) -> Position | None:
+        quote_amount = self.config.risk.quote_per_trade
+
+        # Validar el importe contra el mínimo del exchange (si lo conocemos).
+        if self.symbol_info is not None:
+            quote_amount, err = self.symbol_info.check_market_buy(quote_amount)
+            if err:
+                log.warning("Compra omitida: %s", err)
+                self.notifier.send(f"⚠️ Compra omitida en {self.config.symbol}: {err}")
+                return None
+
         position = self.risk.build_position(self.config.symbol, price)
+        self._apply_precision(position)  # ajustar cantidad y precios
+
         if self.live:
             resp = self.client.new_order(
                 symbol=self.config.symbol,
                 side="BUY",
                 order_type="MARKET",
-                quote_order_qty=self.config.risk.quote_per_trade,
+                quote_order_qty=quote_amount,
             )
             log.info("Orden BUY real enviada: %s", resp)
         else:
-            log.info("[PAPER] Compra simulada %.6f @ %.2f (SL %.2f / TP %.2f)",
+            log.info("[PAPER] Compra simulada %.8f @ %.2f (SL %.2f / TP %.2f)",
                      position.quantity, price, position.stop_loss, position.take_profit)
         self.risk.register_open(position)
         self.store.add_position(position)  # persistir la posición abierta
@@ -89,7 +130,7 @@ class TradingEngine:
             f"🟢 <b>COMPRA</b> ({self.mode_label})\n"
             f"{self.config.symbol}\n"
             f"Precio: <b>{price:.2f}</b>\n"
-            f"Cantidad: {position.quantity:.6f}\n"
+            f"Cantidad: {position.quantity:.8f}\n"
             f"Stop-loss: {position.stop_loss:.2f}\n"
             f"Take-profit: {position.take_profit:.2f}"
         )
@@ -97,11 +138,21 @@ class TradingEngine:
 
     def _market_sell(self, position: Position, price: float, reason: str) -> None:
         if self.live:
+            # Ajustar la cantidad a la precisión del símbolo antes de vender.
+            sell_qty = position.quantity
+            if self.symbol_info is not None:
+                sell_qty, err = self.symbol_info.check_sell_qty(sell_qty)
+                if err:
+                    log.error("No se pudo vender %s: %s", self.config.symbol, err)
+                    self.notifier.send(
+                        f"⚠️ No se pudo cerrar {self.config.symbol}: {err}"
+                    )
+                    return
             resp = self.client.new_order(
                 symbol=self.config.symbol,
                 side="SELL",
                 order_type="MARKET",
-                quantity=round(position.quantity, 6),
+                quantity=sell_qty,
             )
             log.info("Orden SELL real enviada (%s): %s", reason, resp)
         pnl = self.risk.register_close(position, price)

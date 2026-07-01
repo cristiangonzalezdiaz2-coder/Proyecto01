@@ -14,6 +14,8 @@ modular preparada para añadir futuros más adelante. Incluye modo simulación
 - ✅ Modo **paper** (simulación) y **live** (órdenes reales).
 - ✅ Cuatro estrategias listas: cruce de medias, RSI, MACD y Bollinger
   (framework fácil de extender).
+- ✅ **Ajuste de precisión por símbolo** (`exchangeInfo`): redondea cantidades
+  y precios y valida el importe mínimo para que MEXC no rechace las órdenes.
 - ✅ Gestión de riesgo: stop-loss, take-profit, tamaño de posición, límite de
   pérdida diaria y máximo de posiciones abiertas.
 - ✅ Backtesting con datos históricos reales.
@@ -140,6 +142,26 @@ Usa `python backtest.py --compare` para ver cuál rinde mejor en un par e
 intervalo concretos antes de elegir. Puedes añadir la tuya creando una clase que
 herede de `Strategy` en `src/strategies/` y registrándola en `STRATEGIES`.
 
+## Precisión por símbolo
+
+Antes de operar, el bot consulta `/api/v3/exchangeInfo` y aprende las reglas del
+par: cuántos decimales admite la **cantidad** y el **precio**, y el **importe
+mínimo** de orden (notional). Con eso:
+
+- **Trunca** la cantidad a los decimales permitidos (hacia abajo, para no
+  exceder tu balance) y **redondea** los precios de stop-loss/take-profit.
+- **Omite la compra** si `quote_per_trade` no llega al mínimo del par (en MEXC
+  suele ser ~5 USDT), avisando por log y Telegram en vez de mandar una orden
+  que sería rechazada.
+- Si el par no admite spot en ese momento, no opera.
+
+Puedes ver la precisión de tu par con:
+```bash
+python main.py --check
+```
+Si MEXC no está accesible al arrancar, el bot lo avisa y sigue funcionando sin
+ajuste de precisión (útil en modo paper).
+
 ## Persistencia (SQLite)
 
 El bot guarda su estado en una base de datos SQLite (`data/bot.db` por defecto,
@@ -190,6 +212,6 @@ pytest
 - [x] Persistir el estado de las posiciones (SQLite) para reinicios.
 - [x] Notificaciones (Telegram) en cada operación.
 - [x] Dashboard web para ver posiciones e historial.
-- [ ] Ajustar cantidades a la precisión (`exchangeInfo`) de cada símbolo.
+- [x] Ajustar cantidades a la precisión (`exchangeInfo`) de cada símbolo.
 - [ ] Soporte de futuros cuando la cuenta lo permita.
 ```

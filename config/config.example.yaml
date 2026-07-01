@@ -49,6 +49,8 @@ strategy:
 # ---------------- Gestión de riesgo ----------------
 risk:
   # Capital (en moneda cotizada, ej USDT) a usar por operación.
+  # Debe superar el mínimo del par (en MEXC suele ser ~5 USDT). El bot lo
+  # verifica con exchangeInfo y omite la compra si no llega al mínimo.
   quote_per_trade: 20.0
   # Stop-loss y take-profit como fracción (0.02 = 2%).
   stop_loss_pct: 0.02

@@ -22,6 +22,18 @@ def check_connection(cfg) -> int:
         log.info("Conexión con MEXC: OK")
         price = client.get_price(cfg.symbol)
         log.info("Precio actual %s: %.2f", cfg.symbol, price)
+
+        info = client.get_symbol_info(cfg.symbol)
+        log.info("Precisión %s | cantidad: %d dec | precio: %d dec | "
+                 "mín. orden mercado: %s %s | trading: %s",
+                 info.symbol, info.base_precision, info.quote_precision,
+                 info.min_quote_amount_market, info.quote_asset,
+                 "permitido" if info.trading_allowed else "NO permitido")
+        if cfg.risk.quote_per_trade < info.min_quote_amount_market:
+            log.warning("quote_per_trade (%.2f) es menor que el mínimo de mercado "
+                        "(%.2f %s): las compras serían rechazadas.",
+                        cfg.risk.quote_per_trade, info.min_quote_amount_market, info.quote_asset)
+
         if cfg.api_key and cfg.api_secret:
             usdt = client.get_balance("USDT")
             log.info("Balance USDT (spot): %.4f", usdt)
