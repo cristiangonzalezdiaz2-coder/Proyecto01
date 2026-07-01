@@ -17,6 +17,7 @@ modular preparada para añadir futuros más adelante. Incluye modo simulación
   pérdida diaria y máximo de posiciones abiertas.
 - ✅ Backtesting con datos históricos reales.
 - ✅ Notificaciones por **Telegram** en cada operación (opcional).
+- ✅ **Persistencia en SQLite**: sobrevive a reinicios sin perder posiciones.
 - ✅ Logging a consola y archivo.
 
 ## Estructura
@@ -113,6 +114,24 @@ cuentas retail. Antes de desarrollar esa parte conviene verificar qué permite t
 cuenta. La arquitectura actual (cliente base + cliente spot) está pensada para
 añadir un `MexcFuturesClient` cuando se confirme el acceso.
 
+## Persistencia (SQLite)
+
+El bot guarda su estado en una base de datos SQLite (`data/bot.db` por defecto,
+configurable con `db_path` en `config.yaml`). Así, si el bot se reinicia o se
+cae, al arrancar de nuevo:
+
+- **Recupera las posiciones abiertas** y sigue vigilando su stop-loss/take-profit.
+- **Restaura el PnL del día** y el bloqueo por pérdida máxima diaria.
+
+Además, cada operación cerrada se guarda en la tabla `trades` como historial.
+La carpeta `data/` está en `.gitignore`, así que la base de datos nunca se sube
+al repositorio.
+
+Tablas:
+- `positions` — posiciones (abiertas y cerradas).
+- `trades` — historial de operaciones cerradas con su PnL.
+- `daily_state` — PnL y estado de bloqueo por día.
+
 ## Pruebas
 
 ```bash
@@ -123,7 +142,7 @@ pytest
 ## Próximos pasos sugeridos
 
 - [ ] Añadir más estrategias (RSI, MACD, grid, DCA).
-- [ ] Persistir el estado de las posiciones (SQLite) para reinicios.
+- [x] Persistir el estado de las posiciones (SQLite) para reinicios.
 - [x] Notificaciones (Telegram) en cada operación.
 - [ ] Ajustar cantidades a la precisión (`exchangeInfo`) de cada símbolo.
 - [ ] Soporte de futuros cuando la cuenta lo permita.

@@ -1,7 +1,13 @@
 """Gestión de riesgo: posiciones, stop-loss, take-profit y límite de pérdida diaria."""
-from dataclasses import dataclass
+from dataclasses import dataclass, field
+from datetime import datetime, timezone
+from typing import Optional
 
 from ..config import RiskConfig
+
+
+def _now_iso() -> str:
+    return datetime.now(timezone.utc).isoformat()
 
 
 @dataclass
@@ -11,6 +17,8 @@ class Position:
     quantity: float          # cantidad en el activo base
     stop_loss: float
     take_profit: float
+    opened_at: str = field(default_factory=_now_iso)
+    id: Optional[int] = None  # id en la base de datos (None si aún no persistida)
 
     def unrealized_pnl(self, current_price: float) -> float:
         return (current_price - self.entry_price) * self.quantity

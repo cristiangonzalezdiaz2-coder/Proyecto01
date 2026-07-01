@@ -13,10 +13,15 @@ from ..config import AppConfig
 from ..logger import get_logger
 from ..mexc import MexcSpotClient
 from ..notifications import TelegramNotifier
+from ..persistence import PositionStore
 from ..risk import Position, RiskManager
 from ..strategies import Signal, load_strategy
 
 log = get_logger("engine")
+
+
+def _today_str() -> str:
+    return datetime.now(timezone.utc).date().isoformat()
 
 
 def klines_to_df(raw: list[list]) -> pd.DataFrame:
@@ -36,16 +41,33 @@ class TradingEngine:
         self.risk = RiskManager(config.risk)
         self.live = config.trading_mode == "live"
         self.notifier = TelegramNotifier(config.telegram_token, config.telegram_chat_id)
+        self.store = PositionStore(config.db_path)
+
+        # Restaurar estado de una sesión anterior (posiciones abiertas + PnL diario).
+        self._restore_state()
 
         self.mode_label = "LIVE (dinero real)" if self.live else "PAPER (simulación)"
         log.info("Motor iniciado | modo=%s | símbolo=%s | estrategia=%s",
                  self.mode_label, config.symbol, self.strategy.name)
+        recovered = len(self.risk.open_positions)
         self.notifier.send(
             f"🤖 <b>Bot MEXC iniciado</b>\n"
             f"Modo: {self.mode_label}\n"
             f"Símbolo: {config.symbol}\n"
-            f"Estrategia: {self.strategy.name}"
+            f"Estrategia: {self.strategy.name}\n"
+            f"Posiciones recuperadas: {recovered}"
         )
+
+    # ------------------------------------------------------------------
+    def _restore_state(self) -> None:
+        """Carga posiciones abiertas y el estado diario desde la base de datos."""
+        self.risk.open_positions = self.store.load_open_positions()
+        today = _today_str()
+        state = self.store.load_daily_state(today)
+        if state is not None:
+            self.risk.daily_pnl, self.risk.halted = state
+            log.info("Estado diario restaurado: PnL=%.4f, bloqueado=%s",
+                     self.risk.daily_pnl, self.risk.halted)
 
     # ------------------------------------------------------------------
     def _market_buy(self, price: float) -> Position:
@@ -62,6 +84,7 @@ class TradingEngine:
             log.info("[PAPER] Compra simulada %.6f @ %.2f (SL %.2f / TP %.2f)",
                      position.quantity, price, position.stop_loss, position.take_profit)
         self.risk.register_open(position)
+        self.store.add_position(position)  # persistir la posición abierta
         self.notifier.send(
             f"🟢 <b>COMPRA</b> ({self.mode_label})\n"
             f"{self.config.symbol}\n"
@@ -82,6 +105,9 @@ class TradingEngine:
             )
             log.info("Orden SELL real enviada (%s): %s", reason, resp)
         pnl = self.risk.register_close(position, price)
+        # Persistir el cierre y el nuevo estado diario.
+        self.store.close_position(position, price, pnl, reason)
+        self.store.save_daily_state(_today_str(), self.risk.daily_pnl, self.risk.halted)
         log.info("[%s] Cierre por %s @ %.2f | PnL=%.4f | PnL diario=%.4f",
                  "LIVE" if self.live else "PAPER", reason, price, pnl, self.risk.daily_pnl)
 
@@ -146,6 +172,9 @@ class TradingEngine:
                 today = datetime.now(timezone.utc).date()
                 if today != current_day:
                     self.risk.reset_daily()
+                    self.store.save_daily_state(
+                        today.isoformat(), self.risk.daily_pnl, self.risk.halted
+                    )
                     current_day = today
                     log.info("Nuevo día: contador de pérdidas reiniciado.")
 
@@ -157,3 +186,5 @@ class TradingEngine:
                 time.sleep(self.config.poll_seconds)
         except KeyboardInterrupt:
             log.info("Detenido por el usuario. PnL de la sesión: %.4f", self.risk.daily_pnl)
+        finally:
+            self.store.close()

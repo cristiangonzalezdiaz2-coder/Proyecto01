@@ -34,6 +34,7 @@ class AppConfig:
     risk: RiskConfig
     telegram_token: str = ""
     telegram_chat_id: str = ""
+    db_path: str = "data/bot.db"
 
 
 def load_config(config_path: str = "config/config.yaml") -> AppConfig:
@@ -74,4 +75,5 @@ def load_config(config_path: str = "config/config.yaml") -> AppConfig:
         risk=risk,
         telegram_token=telegram_token,
         telegram_chat_id=telegram_chat_id,
+        db_path=raw.get("db_path", "data/bot.db"),
     )

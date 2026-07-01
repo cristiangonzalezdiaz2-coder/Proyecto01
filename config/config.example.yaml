@@ -13,6 +13,10 @@ interval: 15m
 # Cada cuántos segundos revisa el mercado el bot.
 poll_seconds: 60
 
+# Ruta de la base de datos SQLite donde se guardan posiciones e historial.
+# (La carpeta data/ está en .gitignore.)
+db_path: data/bot.db
+
 # ---------------- Estrategia ----------------
 strategy:
   name: ma_crossover          # nombre de la estrategia a cargar
