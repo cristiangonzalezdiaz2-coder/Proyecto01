@@ -45,11 +45,16 @@ class MexcSpotClient(MexcBaseClient):
 
     def get_balance(self, asset: str) -> float:
         """Balance libre de un activo concreto, ej. 'USDT'."""
+        return self.get_asset_balance(asset)[0]
+
+    def get_asset_balance(self, asset: str) -> tuple[float, float]:
+        """(free, locked) de un activo. `locked` es lo retenido en órdenes
+        abiertas (p. ej. una venta LIMIT de take-profit)."""
         data = self.account()
         for bal in data.get("balances", []):
             if bal["asset"] == asset:
-                return float(bal["free"])
-        return 0.0
+                return float(bal.get("free") or 0), float(bal.get("locked") or 0)
+        return 0.0, 0.0
 
     def new_order(
         self,
@@ -80,6 +85,13 @@ class MexcSpotClient(MexcBaseClient):
         if price is not None:
             params["price"] = price
         return self.post("/api/v3/order", params, signed=True)
+
+    def query_order(self, symbol: str, order_id: str) -> dict:
+        """Consulta el estado de una orden (incluye executedQty y
+        cummulativeQuoteQty, necesarios para conocer el fill real)."""
+        return self.get(
+            "/api/v3/order", {"symbol": symbol, "orderId": order_id}, signed=True
+        )
 
     def cancel_order(self, symbol: str, order_id: str) -> dict:
         return self.delete(

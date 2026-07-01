@@ -59,6 +59,28 @@ risk:
   max_daily_loss: 50.0
   # Número máximo de posiciones abiertas simultáneas.
   max_open_positions: 1
+  # Comisión del exchange por lado, como fracción (0.0005 = 0.05%, la tarifa
+  # taker de MEXC spot). Se descuenta del PnL de cada operación en live, paper
+  # y backtest. Ajústala a la de tu cuenta; 0 para ignorar comisiones.
+  fee_pct: 0.0005
+  # Trailing stop (opcional): si es > 0, el stop-loss sube siguiendo al precio
+  # a esta distancia (0.015 = 1.5% por debajo del máximo alcanzado). Nunca
+  # baja del nivel actual, así que con el avance del precio pasa a asegurar
+  # beneficios. 0 = stop fijo. Pruébalo antes en el backtest con --trailing.
+  trailing_stop_pct: 0.0
+  # Dimensionado de la posición (sizing):
+  #   fixed        -> usa quote_per_trade tal cual (por defecto).
+  #   balance_pct  -> usa sizing_pct del balance disponible (0.1 = 10%).
+  #   risk_pct     -> arriesga sizing_pct del balance por operación:
+  #                   importe = balance * sizing_pct / stop_loss_pct
+  #                   (ej. 0.01 con stop del 2% -> 50% del balance).
+  # En live el balance es el saldo real de la moneda cotizada; en paper se usa
+  # paper_balance más el PnL realizado (interés compuesto). Pruébalo antes en
+  # el backtest con --sizing/--sizing-pct/--balance.
+  sizing: fixed
+  sizing_pct: 0.0
+  # Capital simulado inicial (moneda cotizada) para paper/backtest.
+  paper_balance: 1000.0
 
 # ============================================================
 #  RIESGO GLOBAL (opcional, recomendado con multi-bot)

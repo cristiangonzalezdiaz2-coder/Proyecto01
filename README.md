@@ -22,9 +22,51 @@ modular preparada para añadir futuros más adelante. Incluye modo simulación
   que el optimizador no vio (out-of-sample), para evitar el sobreajuste.
 - ✅ **Ajuste de precisión por símbolo** (`exchangeInfo`): redondea cantidades
   y precios y valida el importe mínimo para que MEXC no rechace las órdenes.
-- ✅ Gestión de riesgo: stop-loss, take-profit, tamaño de posición, límite de
-  pérdida diaria y máximo de posiciones abiertas.
-- ✅ Backtesting con datos históricos reales.
+- ✅ **Fills reales en modo live**: la posición se registra con el precio medio
+  y la cantidad realmente ejecutados (no con el precio de la vela), el PnL se
+  calcula con el precio real de salida y se mide el slippage de cada orden.
+- ✅ **Verificación del estado de la orden**: una compra cancelada/rechazada no
+  abre posición, una venta fallida deja la posición abierta y se reintenta, y
+  las ejecuciones parciales se registran solo con lo realmente ejecutado.
+- ✅ **Comisiones incluidas en el PnL** (`fee_pct`, por defecto 0.05% por lado):
+  el PnL de cada operación es neto en live, paper, backtest y walk-forward
+  (`--fee` en el backtest para probar otras tarifas).
+- ✅ **Take-profit en el propio exchange** (live): tras cada compra se coloca
+  una orden LIMIT de venta en MEXC, que se ejecuta aunque el bot esté caído.
+  (La API spot v3 de MEXC no admite órdenes stop, así que el stop-loss se
+  vigila localmente en cada ciclo.) Las cantidades a vender se ajustan al
+  saldo libre real: MEXC cobra la comisión de las compras MARKET en el
+  activo comprado, y ofrecer la cantidad completa sería rechazado.
+- ✅ **Reconciliación de balances al reiniciar** (live): si el balance real no
+  respalda una posición restaurada (venta manual, otra app...), se reduce o
+  descarta con aviso, en vez de operar sobre datos falsos.
+- ✅ **Reintentos con backoff ante rate limits** (429/418) en el cliente MEXC;
+  los errores de red/5xx solo se reintentan en peticiones de lectura para no
+  duplicar órdenes.
+- ✅ **Sincronización de reloj con el servidor**: el desfase con MEXC se
+  calcula antes de la primera petición firmada (y se corrige a diario), para
+  que la deriva del reloj local no invalide las firmas (recvWindow de 5 s).
+- ✅ **Posiciones "dust" controladas**: si una cantidad es invendible (por
+  debajo del mínimo del par), tras varios intentos la posición se retira con
+  un cierre administrativo en vez de reintentar y notificar para siempre.
+- ✅ **CI con GitHub Actions**: la suite de tests corre en cada push.
+- ✅ **Riesgo global sin carreras**: la comprobación y la reserva de cupo son
+  una única operación atómica, de modo que varios bots en paralelo no pueden
+  exceder juntos los límites compartidos.
+- ✅ **Señales solo con velas cerradas**: la vela en formación se usa para el
+  precio actual y los SL/TP, pero las estrategias solo ven velas cerradas y
+  cada una se evalúa una única vez (igual que en el backtest).
+- ✅ Gestión de riesgo: stop-loss, take-profit, **trailing stop** opcional
+  (`trailing_stop_pct`; el stop sube con el precio y asegura beneficios, con
+  el nivel persistido entre reinicios), tamaño de posición, límite de pérdida
+  diaria y máximo de posiciones abiertas.
+- ✅ **Sizing dinámico** opcional: además del importe fijo, `balance_pct`
+  (un % del balance disponible) o `risk_pct` (arriesgar un % fijo del balance
+  por operación según la distancia del stop). En live usa el saldo real; en
+  paper/backtest, un capital simulado que compone con el PnL realizado.
+- ✅ Backtesting con datos históricos reales y **salidas intra-vela**: los
+  SL/TP se evalúan contra el high/low de cada vela (si una vela toca ambos,
+  gana el stop) y los gaps se ejecutan al precio de apertura.
 - ✅ Notificaciones por **Telegram** en cada operación (opcional).
 - ✅ **Persistencia en SQLite**: sobrevive a reinicios sin perder posiciones.
 - ✅ **Dashboard web** (solo lectura) con curva de equity y métricas avanzadas
@@ -178,8 +220,8 @@ OOS; el **OOS combinado** (lo que importa); y una **referencia de sobreajuste**
 referencia, esos parámetros están sobreajustados y no debes fiarte de ellos.
 
 > Elige los parámetros que rinden bien OOS de forma **consistente entre folds**,
-> no los que dieron el mayor PnL en un solo tramo. Los resultados no incluyen
-> comisiones ni slippage: son orientativos, no una garantía.
+> no los que dieron el mayor PnL en un solo tramo. Los resultados incluyen
+> comisiones (`fee_pct`) pero no slippage: son orientativos, no una garantía.
 
 ## Precisión por símbolo
 

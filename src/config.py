@@ -20,6 +20,27 @@ class RiskConfig:
     take_profit_pct: float = 0.04
     max_daily_loss: float = 50.0
     max_open_positions: int = 1
+    # Comisión del exchange por lado, como fracción (0.0005 = 0.05%, la tarifa
+    # taker de MEXC spot). Se descuenta del PnL de cada operación (compra y
+    # venta) en live, paper y backtest. Pon 0 para ignorar comisiones.
+    fee_pct: float = 0.0005
+    # Trailing stop (opcional): si es > 0, el stop-loss sube siguiendo al
+    # precio a esta distancia (0.015 = 1.5% por debajo del máximo alcanzado).
+    # Nunca baja del stop inicial y asegura beneficios cuando el precio
+    # avanza. 0 = desactivado (stop fijo).
+    trailing_stop_pct: float = 0.0
+    # Dimensionado de la posición (sizing):
+    #   fixed        -> usa quote_per_trade tal cual (por defecto).
+    #   balance_pct  -> usa sizing_pct del balance disponible (0.1 = 10%).
+    #   risk_pct     -> arriesga sizing_pct del balance por operación:
+    #                   importe = balance * sizing_pct / stop_loss_pct
+    #                   (ej. 0.01 con stop del 2% -> 50% del balance).
+    # En live el balance es el saldo real de la moneda cotizada; en paper y
+    # backtest se usa paper_balance más el PnL realizado (interés compuesto).
+    sizing: str = "fixed"
+    sizing_pct: float = 0.0
+    # Capital simulado inicial (moneda cotizada) para paper/backtest.
+    paper_balance: float = 1000.0
 
 
 @dataclass
@@ -83,6 +104,17 @@ class AppConfig:
     @property
     def risk(self) -> RiskConfig:
         return self.bots[0].risk
+
+
+def validate_risk(risk: RiskConfig) -> None:
+    """Valida la configuración de riesgo (falla al cargar, no en pleno ciclo)."""
+    valid = ("fixed", "balance_pct", "risk_pct")
+    if risk.sizing not in valid:
+        raise ValueError(f"sizing '{risk.sizing}' no válido; usa uno de {valid}.")
+    if risk.sizing != "fixed" and not 0 < risk.sizing_pct <= 1:
+        raise ValueError("Con sizing dinámico, sizing_pct debe estar en (0, 1].")
+    if risk.sizing == "risk_pct" and risk.stop_loss_pct <= 0:
+        raise ValueError("sizing 'risk_pct' requiere stop_loss_pct > 0.")
 
 
 def _parse_strategy(raw_strategy: dict, default: StrategyConfig) -> StrategyConfig:
@@ -153,6 +185,9 @@ def load_config(config_path: str = "config/config.yaml") -> AppConfig:
             strategy=default_strategy,
             risk=default_risk,
         ))
+
+    for bot in bots:
+        validate_risk(bot.risk)
 
     raw_global = raw.get("global_risk")
     if raw_global:

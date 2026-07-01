@@ -95,13 +95,21 @@ def run_segment(df_full: pd.DataFrame, symbol: str, strategy,
     last_price = None
     for i in range(1, open_end):
         window = df_full.iloc[: i + 1]
-        price = float(window["close"].iloc[-1])
+        candle = window.iloc[-1]
+        price = float(candle["close"])
         last_price = price
 
-        # Salidas por stop-loss / take-profit (permitidas siempre).
+        # Salidas por SL/TP contra el RANGO de la vela (permitidas siempre).
         for pos in list(risk.open_positions):
-            if risk.should_close(pos, price):
-                pnls.append(risk.register_close(pos, price))
+            exit_ = risk.check_candle_exit(pos, float(candle["open"]),
+                                           float(candle["high"]), float(candle["low"]))
+            if exit_:
+                _reason, exit_price = exit_
+                pnls.append(risk.register_close(pos, exit_price))
+
+        # Trailing stop (si está activo): efectivo desde la vela siguiente.
+        for pos in risk.open_positions:
+            risk.update_trailing(pos, float(candle["high"]))
 
         # Entradas solo dentro del segmento evaluado.
         if open_start <= i < open_end:

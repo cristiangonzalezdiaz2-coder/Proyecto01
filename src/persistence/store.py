@@ -47,7 +47,8 @@ class PositionStore:
                 stop_loss   REAL    NOT NULL,
                 take_profit REAL    NOT NULL,
                 opened_at   TEXT    NOT NULL,
-                status      TEXT    NOT NULL DEFAULT 'open'
+                status      TEXT    NOT NULL DEFAULT 'open',
+                tp_order_id TEXT
             );
 
             CREATE TABLE IF NOT EXISTS trades (
@@ -84,6 +85,10 @@ class PositionStore:
                 )
                 log.info("Migración: columna 'bot' añadida a %s.", table)
 
+        if "tp_order_id" not in self._columns("positions"):
+            self._conn.execute("ALTER TABLE positions ADD COLUMN tp_order_id TEXT")
+            log.info("Migración: columna 'tp_order_id' añadida a positions.")
+
         if "bot" not in self._columns("daily_state"):
             # Reconstruir daily_state con clave compuesta (bot, day).
             self._conn.executescript(
@@ -109,10 +114,12 @@ class PositionStore:
         """Inserta una posición abierta y le asigna su id de base de datos."""
         cur = self._conn.execute(
             """INSERT INTO positions
-               (bot, symbol, entry_price, quantity, stop_loss, take_profit, opened_at, status)
-               VALUES (?, ?, ?, ?, ?, ?, ?, 'open')""",
+               (bot, symbol, entry_price, quantity, stop_loss, take_profit,
+                opened_at, status, tp_order_id)
+               VALUES (?, ?, ?, ?, ?, ?, ?, 'open', ?)""",
             (bot, position.symbol, position.entry_price, position.quantity,
-             position.stop_loss, position.take_profit, position.opened_at),
+             position.stop_loss, position.take_profit, position.opened_at,
+             position.tp_order_id),
         )
         self._conn.commit()
         position.id = cur.lastrowid
@@ -133,7 +140,7 @@ class PositionStore:
             Position(
                 symbol=r["symbol"], entry_price=r["entry_price"], quantity=r["quantity"],
                 stop_loss=r["stop_loss"], take_profit=r["take_profit"],
-                opened_at=r["opened_at"], id=r["id"],
+                opened_at=r["opened_at"], id=r["id"], tp_order_id=r["tp_order_id"],
             )
             for r in rows
         ]
@@ -141,6 +148,33 @@ class PositionStore:
             log.info("Recuperadas %d posición(es) abierta(s)%s.",
                      len(positions), f" del bot {bot}" if bot else "")
         return positions
+
+    def set_tp_order(self, position_id: int | None, order_id: str | None) -> None:
+        """Guarda (o borra) el id de la orden TP del exchange de una posición."""
+        if position_id is None:
+            return
+        self._conn.execute(
+            "UPDATE positions SET tp_order_id = ? WHERE id = ?", (order_id, position_id)
+        )
+        self._conn.commit()
+
+    def update_position_stop(self, position_id: int | None, stop_loss: float) -> None:
+        """Actualiza el stop-loss de una posición (trailing stop)."""
+        if position_id is None:
+            return
+        self._conn.execute(
+            "UPDATE positions SET stop_loss = ? WHERE id = ?", (stop_loss, position_id)
+        )
+        self._conn.commit()
+
+    def update_position_quantity(self, position_id: int | None, quantity: float) -> None:
+        """Ajusta la cantidad de una posición (p. ej. tras reconciliar balances)."""
+        if position_id is None:
+            return
+        self._conn.execute(
+            "UPDATE positions SET quantity = ? WHERE id = ?", (quantity, position_id)
+        )
+        self._conn.commit()
 
     def close_position(self, position: Position, exit_price: float,
                        pnl: float, reason: str, bot: str = "default") -> None:
@@ -217,6 +251,13 @@ class PositionStore:
             "FROM positions WHERE status = 'open'"
         ).fetchone()
         return float(row["exp"] or 0.0), int(row["n"] or 0)
+
+    def fetch_bot_realized_pnl(self, bot: str) -> float:
+        """PnL realizado acumulado de un bot (todas sus operaciones cerradas)."""
+        row = self._conn.execute(
+            "SELECT COALESCE(SUM(pnl), 0) AS s FROM trades WHERE bot = ?", (bot,)
+        ).fetchone()
+        return float(row["s"] or 0.0)
 
     def fetch_bots(self) -> list[str]:
         """Nombres de bots presentes en el historial o con posiciones abiertas."""

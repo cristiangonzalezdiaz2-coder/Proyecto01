@@ -19,6 +19,8 @@ class Position:
     take_profit: float
     opened_at: str = field(default_factory=_now_iso)
     id: Optional[int] = None  # id en la base de datos (None si aún no persistida)
+    # Id de la orden LIMIT de take-profit colocada en el exchange (solo live).
+    tp_order_id: Optional[str] = None
 
     def unrealized_pnl(self, current_price: float) -> float:
         return (current_price - self.entry_price) * self.quantity
@@ -40,9 +42,31 @@ class RiskManager:
             return False
         return len(self.open_positions) < self.config.max_open_positions
 
-    def build_position(self, symbol: str, entry_price: float) -> Position:
-        """Crea una posición dimensionada según quote_per_trade y los % de riesgo."""
-        quantity = self.config.quote_per_trade / entry_price
+    def position_size(self, available_quote: float | None) -> float:
+        """Importe en moneda cotizada para la próxima compra según `sizing`.
+
+        'fixed' devuelve quote_per_trade. Los modos dinámicos parten del
+        balance disponible; si este no se conoce (None), se cae a
+        quote_per_trade. El resultado nunca supera el balance disponible."""
+        c = self.config
+        if c.sizing == "fixed" or available_quote is None:
+            return c.quote_per_trade
+        if c.sizing == "balance_pct":
+            amount = available_quote * c.sizing_pct
+        elif c.sizing == "risk_pct":
+            # Arriesgar sizing_pct del balance: si el stop salta, se pierde
+            # (aprox.) balance * sizing_pct. tamaño = riesgo / distancia stop.
+            amount = available_quote * c.sizing_pct / c.stop_loss_pct
+        else:
+            raise ValueError(f"Modo de sizing desconocido: {c.sizing!r}")
+        return min(amount, available_quote)
+
+    def build_position(self, symbol: str, entry_price: float,
+                       quote_amount: float | None = None) -> Position:
+        """Crea una posición dimensionada con `quote_amount` (o quote_per_trade
+        si no se indica) y los % de riesgo."""
+        quote = quote_amount if quote_amount is not None else self.config.quote_per_trade
+        quantity = quote / entry_price
         stop_loss = entry_price * (1 - self.config.stop_loss_pct)
         take_profit = entry_price * (1 + self.config.take_profit_pct)
         return Position(
@@ -56,17 +80,59 @@ class RiskManager:
     def register_open(self, position: Position) -> None:
         self.open_positions.append(position)
 
+    def update_trailing(self, position: Position, price: float) -> bool:
+        """Trailing stop: sube el stop-loss siguiendo al precio.
+
+        Si trailing_stop_pct > 0, el stop se coloca a esa distancia por debajo
+        del máximo alcanzado. Solo sube (nunca baja del nivel actual), así que
+        con el avance del precio pasa a asegurar beneficios. Devuelve True si
+        el stop subió (el llamador debe persistir el cambio)."""
+        pct = self.config.trailing_stop_pct
+        if not pct:
+            return False
+        new_stop = price * (1 - pct)
+        if new_stop > position.stop_loss:
+            position.stop_loss = new_stop
+            return True
+        return False
+
     def should_close(self, position: Position, current_price: float) -> str | None:
-        """Devuelve 'stop_loss', 'take_profit' o None."""
+        """Devuelve 'stop_loss', 'take_profit' o None (para el bot en vivo,
+        que evalúa contra el precio actual en cada ciclo)."""
         if current_price <= position.stop_loss:
             return "stop_loss"
         if current_price >= position.take_profit:
             return "take_profit"
         return None
 
+    def check_candle_exit(self, position: Position, open_: float,
+                          high: float, low: float) -> tuple[str, float] | None:
+        """Evalúa SL/TP contra el RANGO de una vela (para backtesting).
+
+        Mirar solo el cierre ignora los stops y TPs tocados dentro de la vela
+        e infla los resultados. Devuelve (motivo, precio_de_salida) o None.
+
+        Convenciones (conservadoras):
+          - Si la vela toca el stop y el take-profit, gana el stop.
+          - Gap bajista: si la vela abre por debajo del stop, se sale al precio
+            de apertura (peor que el stop), como haría una orden de mercado.
+          - Gap alcista: si abre por encima del TP, la venta LIMIT se ejecuta
+            a la apertura (mejor que el TP)."""
+        if low <= position.stop_loss:
+            return "stop_loss", min(open_, position.stop_loss)
+        if high >= position.take_profit:
+            return "take_profit", max(open_, position.take_profit)
+        return None
+
+    def trade_fees(self, position: Position, exit_price: float) -> float:
+        """Comisiones estimadas de la operación completa (compra + venta)."""
+        return (position.entry_price + exit_price) * position.quantity * self.config.fee_pct
+
     def register_close(self, position: Position, exit_price: float) -> float:
-        """Cierra una posición, actualiza el PnL diario y aplica el límite."""
-        pnl = position.unrealized_pnl(exit_price)
+        """Cierra una posición, actualiza el PnL diario y aplica el límite.
+
+        El PnL devuelto es NETO: descuenta las comisiones de compra y venta."""
+        pnl = position.unrealized_pnl(exit_price) - self.trade_fees(position, exit_price)
         self.daily_pnl += pnl
         if position in self.open_positions:
             self.open_positions.remove(position)
