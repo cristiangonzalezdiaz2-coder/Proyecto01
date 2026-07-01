@@ -203,6 +203,21 @@ class PositionStore:
         ).fetchall()
         return [dict(r) for r in rows]
 
+    def fetch_global_daily_pnl(self, day: str) -> float:
+        """Suma del PnL diario de todos los bots para un día (riesgo global)."""
+        row = self._conn.execute(
+            "SELECT COALESCE(SUM(daily_pnl), 0) AS s FROM daily_state WHERE day = ?", (day,)
+        ).fetchone()
+        return float(row["s"] or 0.0)
+
+    def fetch_open_exposure(self) -> tuple[float, int]:
+        """Exposición total (suma de entry_price*quantity) y nº de posiciones abiertas."""
+        row = self._conn.execute(
+            "SELECT COALESCE(SUM(entry_price * quantity), 0) AS exp, COUNT(*) AS n "
+            "FROM positions WHERE status = 'open'"
+        ).fetchone()
+        return float(row["exp"] or 0.0), int(row["n"] or 0)
+
     def fetch_bots(self) -> list[str]:
         """Nombres de bots presentes en el historial o con posiciones abiertas."""
         rows = self._conn.execute(

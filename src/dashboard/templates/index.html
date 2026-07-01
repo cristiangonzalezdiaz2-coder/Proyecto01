@@ -41,6 +41,14 @@
     .chart-card { padding: 12px; }
     #equity-chart { width: 100%; display: block; }
     .card .sub { font-size: 12px; color: var(--muted); margin-top: 4px; }
+    .gr-row { margin: 10px 0; }
+    .gr-row .gr-label { display:flex; justify-content:space-between; font-size:13px; margin-bottom:5px; }
+    .gr-bar { height: 10px; background:#0b0f14; border:1px solid var(--border);
+              border-radius:999px; overflow:hidden; }
+    .gr-fill { height:100%; border-radius:999px; transition: width .4s ease; }
+    .badge { padding:3px 10px; border-radius:999px; font-size:12px; font-weight:600; }
+    .badge.ok { background:#132a17; color:var(--green); }
+    .badge.halt { background:#3a1416; color:var(--red); }
   </style>
 </head>
 <body>
@@ -57,6 +65,11 @@
     {% endif %}
 
     <div class="cards" id="cards"></div>
+
+    <section id="global-risk-section" style="display:none">
+      <h2>Riesgo global (compartido entre bots)</h2>
+      <div class="card" id="global-risk"></div>
+    </section>
 
     <section>
       <h2>Curva de equity (PnL acumulado)</h2>
@@ -124,6 +137,33 @@
       document.getElementById("cards").innerHTML = cards.map(([l, v, c]) =>
         `<div class="card"><div class="label">${l}</div><div class="value ${c}">${v}</div></div>`
       ).join("");
+    }
+
+    function renderGlobalRisk(g) {
+      const section = document.getElementById("global-risk-section");
+      if (!g || !g.enabled) { section.style.display = "none"; return; }
+      section.style.display = "block";
+
+      const bar = (label, used, max, invert = false) => {
+        // invert=true para pérdida (más = peor). max 0 => sin límite.
+        const hasMax = max && max > 0;
+        const pct = hasMax ? Math.min(100, Math.abs(used) / max * 100) : 0;
+        const color = !hasMax ? "#388bfd"
+          : (pct >= 90 ? "#f85149" : (pct >= 70 ? "#d29922" : "#2ea043"));
+        const right = hasMax ? `${fmt(Math.abs(used), 2)} / ${fmt(max, 2)}` : `${fmt(Math.abs(used), 2)} (sin límite)`;
+        return `<div class="gr-row"><div class="gr-label"><span>${label}</span>` +
+               `<span class="muted">${right}</span></div>` +
+               `<div class="gr-bar"><div class="gr-fill" style="width:${pct}%;background:${color}"></div></div></div>`;
+      };
+
+      const badge = g.halted
+        ? `<span class="badge halt">⛔ BLOQUEADO</span>`
+        : `<span class="badge ok">✅ Operando</span>`;
+      document.getElementById("global-risk").innerHTML =
+        `<div class="gr-label" style="margin-bottom:12px"><span class="muted">Estado global</span>${badge}</div>` +
+        bar("Exposición comprometida", g.exposure, g.max_total_exposure) +
+        bar("Posiciones abiertas", g.open_count, g.max_open_positions) +
+        bar("Pérdida diaria", g.daily_pnl < 0 ? g.daily_pnl : 0, g.max_daily_loss, true);
     }
 
     function renderMetrics(m) {
@@ -225,6 +265,7 @@
         const res = await fetch("/api/state");
         const data = await res.json();
         renderCards(data.summary);
+        renderGlobalRisk(data.global_risk);
         renderMetrics(data.metrics);
         drawEquity(data.equity_curve);
 

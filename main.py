@@ -11,6 +11,7 @@ from src.config import load_config
 from src.logger import get_logger
 from src.mexc import MexcSpotClient
 from src.trading import MultiRunner, TradingEngine
+from src.trading.runner import build_global_risk
 
 log = get_logger("main")
 
@@ -83,7 +84,8 @@ def main() -> int:
 
     if len(cfg.bots) == 1:
         # Un solo bot: en el hilo principal (Ctrl+C directo).
-        TradingEngine(cfg, cfg.bots[0]).run()
+        global_risk = build_global_risk(cfg)
+        TradingEngine(cfg, cfg.bots[0], global_risk=global_risk).run()
     else:
         # Varios bots en paralelo, cada uno en su hilo.
         MultiRunner(cfg).run()

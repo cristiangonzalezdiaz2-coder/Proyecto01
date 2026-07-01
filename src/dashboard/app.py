@@ -4,17 +4,21 @@ Es de SOLO LECTURA: abre la base de datos SQLite del bot y muestra las
 posiciones abiertas, el historial de operaciones y estadísticas. No ejecuta
 órdenes ni modifica nada.
 """
+from datetime import datetime, timezone
 from pathlib import Path
 
 from flask import Flask, jsonify, render_template
 
 from ..analytics import compute_metrics, equity_curve
+from ..config import GlobalRiskConfig
 from ..persistence import PositionStore
 
 
-def create_app(db_path: str = "data/bot.db") -> Flask:
+def create_app(db_path: str = "data/bot.db",
+               global_risk: GlobalRiskConfig | None = None) -> Flask:
     app = Flask(__name__)
     app.config["DB_PATH"] = db_path
+    grc = global_risk or GlobalRiskConfig()
 
     def _store() -> PositionStore:
         # Una conexión por petición: SQLite en modo WAL lo tolera bien.
@@ -57,11 +61,27 @@ def create_app(db_path: str = "data/bot.db") -> Flask:
                     "max_drawdown": m["max_drawdown"],
                 })
 
+            # Riesgo global: estado actual (BD) frente a los límites configurados.
+            today = datetime.now(timezone.utc).date().isoformat()
+            exposure, open_count = store.fetch_open_exposure()
+            global_daily_pnl = store.fetch_global_daily_pnl(today)
+            global_risk_state = {
+                "enabled": grc.enabled,
+                "exposure": exposure,
+                "max_total_exposure": grc.max_total_exposure,
+                "open_count": open_count,
+                "max_open_positions": grc.max_open_positions,
+                "daily_pnl": global_daily_pnl,
+                "max_daily_loss": grc.max_daily_loss,
+                "halted": bool(grc.max_daily_loss) and global_daily_pnl <= -abs(grc.max_daily_loss),
+            }
+
             return jsonify({
                 "summary": store.fetch_summary(),
                 "metrics": compute_metrics(all_trades),
                 "equity_curve": equity_curve(all_trades),
                 "bots": bots,
+                "global_risk": global_risk_state,
                 "open_positions": open_positions,
                 "trades": store.fetch_trades(limit=50),
                 "daily": store.fetch_daily_states(limit=14),

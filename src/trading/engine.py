@@ -14,12 +14,12 @@ from datetime import datetime, timezone
 
 import pandas as pd
 
-from ..config import AppConfig, BotConfig
+from ..config import AppConfig, BotConfig, GlobalRiskConfig
 from ..logger import get_logger
 from ..mexc import MexcSpotClient
 from ..notifications import TelegramNotifier
 from ..persistence import PositionStore
-from ..risk import Position, RiskManager
+from ..risk import GlobalRiskManager, Position, RiskManager
 from ..strategies import Signal, load_strategy
 
 log = get_logger("engine")
@@ -39,7 +39,8 @@ def klines_to_df(raw: list[list]) -> pd.DataFrame:
 
 
 class TradingEngine:
-    def __init__(self, config: AppConfig, bot: BotConfig | None = None):
+    def __init__(self, config: AppConfig, bot: BotConfig | None = None,
+                 global_risk: GlobalRiskManager | None = None):
         self.config = config
         self.bot = bot or config.bots[0]
         self.name = self.bot.name
@@ -48,6 +49,8 @@ class TradingEngine:
         self.client = MexcSpotClient(config.api_key, config.api_secret)
         self.strategy = load_strategy(self.bot.strategy.name, self.bot.strategy.params)
         self.risk = RiskManager(self.bot.risk)
+        # Riesgo global compartido (deshabilitado si no se pasa uno).
+        self.global_risk = global_risk or GlobalRiskManager(GlobalRiskConfig())
         self.live = config.trading_mode == "live"
         self.notifier = TelegramNotifier(config.telegram_token, config.telegram_chat_id)
         self.store = PositionStore(config.db_path)
@@ -119,6 +122,12 @@ class TradingEngine:
                 self.notifier.send(f"⚠️ [{self.name}] Compra omitida en {self.symbol}: {err}")
                 return None
 
+        # Validar contra los límites de riesgo GLOBAL (compartidos entre bots).
+        ok, gerr = self.global_risk.can_open(quote_amount)
+        if not ok:
+            log.info("[%s] Compra omitida por riesgo global: %s", self.name, gerr)
+            return None
+
         position = self.risk.build_position(self.symbol, price)
         self._apply_precision(position)  # ajustar cantidad y precios
 
@@ -135,6 +144,7 @@ class TradingEngine:
                      self.name, position.quantity, price, position.stop_loss, position.take_profit)
         self.risk.register_open(position)
         self.store.add_position(position, bot=self.name)  # persistir la posición abierta
+        self.global_risk.register_open(position)  # contabilizar en el riesgo global
         self.notifier.send(
             f"🟢 <b>COMPRA</b> [{self.name}] ({self.mode_label})\n"
             f"{self.symbol}\n"
@@ -163,6 +173,7 @@ class TradingEngine:
             )
             log.info("[%s] Orden SELL real enviada (%s): %s", self.name, reason, resp)
         pnl = self.risk.register_close(position, price)
+        self.global_risk.register_close(position, pnl)  # actualizar el riesgo global
         # Persistir el cierre y el nuevo estado diario.
         self.store.close_position(position, price, pnl, reason, bot=self.name)
         self.store.save_daily_state(_today_str(), self.risk.daily_pnl, self.risk.halted, bot=self.name)
@@ -233,6 +244,7 @@ class TradingEngine:
                 today = datetime.now(timezone.utc).date()
                 if today != current_day:
                     self.risk.reset_daily()
+                    self.global_risk.reset_daily(today.isoformat())  # una vez por día
                     self.store.save_daily_state(
                         today.isoformat(), self.risk.daily_pnl, self.risk.halted, bot=self.name
                     )

@@ -61,6 +61,19 @@ risk:
   max_open_positions: 1
 
 # ============================================================
+#  RIESGO GLOBAL (opcional, recomendado con multi-bot)
+# ============================================================
+# Límites COMPARTIDOS entre todos los bots. Un valor de 0 = sin límite.
+# Si defines esta sección, ningún bot podrá abrir una posición que haga
+# superar estos topes combinados; y si se alcanza la pérdida diaria global,
+# TODOS los bots dejan de abrir posiciones hasta el día siguiente.
+#
+# global_risk:
+#   max_total_exposure: 100.0   # USDT máx. comprometidos a la vez (suma de bots)
+#   max_daily_loss: 80.0        # pérdida diaria combinada máxima (USDT)
+#   max_open_positions: 3       # posiciones abiertas simultáneas en total
+
+# ============================================================
 #  MULTI-BOT (opcional)
 # ============================================================
 # Para correr varias estrategias/pares en paralelo, define una lista `bots`.

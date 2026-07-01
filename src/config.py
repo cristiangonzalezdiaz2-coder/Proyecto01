@@ -40,11 +40,25 @@ class BotConfig:
 
 
 @dataclass
+class GlobalRiskConfig:
+    """Límites de riesgo COMPARTIDOS entre todos los bots.
+
+    Un valor de 0 en cualquier límite significa "sin límite" en esa dimensión.
+    `enabled` es True solo si el YAML incluye una sección `global_risk`.
+    """
+    enabled: bool = False
+    max_total_exposure: float = 0.0    # capital máx. comprometido a la vez (todos los bots)
+    max_daily_loss: float = 0.0        # pérdida diaria máxima combinada
+    max_open_positions: int = 0        # posiciones abiertas simultáneas en total
+
+
+@dataclass
 class AppConfig:
     api_key: str
     api_secret: str
     trading_mode: str  # "paper" o "live"
     bots: list[BotConfig]
+    global_risk: GlobalRiskConfig = field(default_factory=GlobalRiskConfig)
     telegram_token: str = ""
     telegram_chat_id: str = ""
     db_path: str = "data/bot.db"
@@ -140,11 +154,23 @@ def load_config(config_path: str = "config/config.yaml") -> AppConfig:
             risk=default_risk,
         ))
 
+    raw_global = raw.get("global_risk")
+    if raw_global:
+        global_risk = GlobalRiskConfig(
+            enabled=True,
+            max_total_exposure=float(raw_global.get("max_total_exposure", 0) or 0),
+            max_daily_loss=float(raw_global.get("max_daily_loss", 0) or 0),
+            max_open_positions=int(raw_global.get("max_open_positions", 0) or 0),
+        )
+    else:
+        global_risk = GlobalRiskConfig()
+
     return AppConfig(
         api_key=api_key,
         api_secret=api_secret,
         trading_mode=trading_mode,
         bots=bots,
+        global_risk=global_risk,
         telegram_token=telegram_token,
         telegram_chat_id=telegram_chat_id,
         db_path=raw.get("db_path", "data/bot.db"),

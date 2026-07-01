@@ -25,14 +25,18 @@ def main() -> None:
     args = parser.parse_args()
 
     db_path = args.db
-    if db_path is None:
-        try:
-            db_path = load_config(args.config).db_path
-        except FileNotFoundError:
+    global_risk = None
+    try:
+        cfg = load_config(args.config)
+        global_risk = cfg.global_risk
+        if db_path is None:
+            db_path = cfg.db_path
+    except FileNotFoundError:
+        if db_path is None:
             db_path = "data/bot.db"
-            log.warning("No hay config.yaml; usando %s por defecto.", db_path)
+        log.warning("No hay config.yaml; usando %s por defecto.", db_path)
 
-    app = create_app(db_path)
+    app = create_app(db_path, global_risk=global_risk)
     log.info("Dashboard en http://%s:%d (BD: %s)", args.host, args.port, db_path)
     app.run(host=args.host, port=args.port, debug=False)
 

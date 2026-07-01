@@ -16,6 +16,8 @@ modular preparada para añadir futuros más adelante. Incluye modo simulación
   (framework fácil de extender).
 - ✅ **Multi-bot**: varias estrategias/pares en paralelo, cada uno con su propio
   riesgo y estado, desglosados en el dashboard.
+- ✅ **Riesgo global compartido**: tope de exposición, posiciones y pérdida
+  diaria combinados entre todos los bots.
 - ✅ **Ajuste de precisión por símbolo** (`exchangeInfo`): redondea cantidades
   y precios y valida el importe mínimo para que MEXC no rechace las órdenes.
 - ✅ Gestión de riesgo: stop-loss, take-profit, tamaño de posición, límite de
@@ -196,6 +198,33 @@ bots:
     risk: { quote_per_trade: 15.0 }
 ```
 
+## Riesgo global (compartido entre bots)
+
+Cuando corres varios bots con la **misma cuenta y balance**, conviene un tope
+combinado. Define una sección `global_risk` en `config.yaml`:
+
+```yaml
+global_risk:
+  max_total_exposure: 100.0   # USDT máx. comprometidos a la vez (suma de bots)
+  max_daily_loss: 80.0        # pérdida diaria combinada máxima (USDT)
+  max_open_positions: 3       # posiciones abiertas simultáneas en total
+```
+
+- Ningún bot abrirá una posición que haga **superar** estos topes combinados.
+- Si se alcanza la **pérdida diaria global**, **todos** los bots dejan de abrir
+  posiciones hasta el día siguiente (las posiciones abiertas siguen gestionando
+  su stop-loss/take-profit con normalidad).
+- Un valor de `0` (o la ausencia de la sección) significa "sin límite".
+- El gestor es **thread-safe** (los bots corren en hilos) y **se reconstruye
+  desde la base de datos** al reiniciar, así que la exposición y el PnL diario
+  global no se pierden.
+- El dashboard muestra una sección **"Riesgo global"** con barras de uso frente
+  a cada tope.
+
+> El límite de pérdida diaria de cada bot (`risk.max_daily_loss`) sigue
+> aplicándose por separado; el global actúa **por encima** como red de seguridad
+> para el conjunto.
+
 ## Persistencia (SQLite)
 
 El bot guarda su estado en una base de datos SQLite (`data/bot.db` por defecto,
@@ -253,6 +282,7 @@ pytest
 - [x] Dashboard web para ver posiciones e historial.
 - [x] Métricas avanzadas y curva de equity en el dashboard.
 - [x] Multi-bot: varias estrategias/pares en paralelo.
+- [x] Límite de riesgo global compartido entre bots.
 - [x] Ajustar cantidades a la precisión (`exchangeInfo`) de cada símbolo.
 - [ ] Soporte de futuros cuando la cuenta lo permita.
 ```
