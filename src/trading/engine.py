@@ -125,6 +125,10 @@ class TradingEngine:
         # (cada vela se evalúa una sola vez, aunque el poll sea más frecuente).
         self._last_signal_candle = None
 
+        # Intentos de cierre fallidos por cantidad invendible, por posición
+        # (tras DUST_CLOSE_AFTER se retira la posición como polvo).
+        self._close_failures: dict = {}
+
         # Restaurar estado de una sesión anterior (posiciones abiertas + PnL diario).
         self._restore_state()
         # En live, comprobar que el balance real respalda lo restaurado.
@@ -483,8 +487,7 @@ class TradingEngine:
             if self.symbol_info is not None:
                 sell_qty, err = self.symbol_info.check_sell_qty(sell_qty)
                 if err:
-                    log.error("[%s] No se pudo vender %s: %s", self.name, self.symbol, err)
-                    self.notifier.send(f"⚠️ [{self.name}] No se pudo cerrar {self.symbol}: {err}")
+                    self._register_close_failure(position, err)
                     return
             resp = self.client.new_order(
                 symbol=self.symbol,
@@ -530,9 +533,48 @@ class TradingEngine:
                             self.name, outcome.status, price)
         self._finalize_close(position, exit_price, reason, slippage_note)
 
+    # Nº de intentos de cierre fallidos por cantidad invendible antes de
+    # retirar la posición como 'dust' (polvo).
+    DUST_CLOSE_AFTER = 3
+
+    @staticmethod
+    def _pos_key(position: Position):
+        return position.id if position.id is not None else id(position)
+
+    def _register_close_failure(self, position: Position, err: str) -> None:
+        """Registra un intento de cierre con cantidad invendible.
+
+        Sin esto, una posición cuya cantidad no alcanza el mínimo vendible
+        reintentaría (y notificaría) en cada ciclo para siempre. Tras
+        DUST_CLOSE_AFTER intentos consecutivos se retira del seguimiento con
+        un cierre administrativo (motivo 'dust', PnL 0); el resto queda como
+        polvo en la cuenta."""
+        key = self._pos_key(position)
+        count = self._close_failures.get(key, 0) + 1
+        self._close_failures[key] = count
+        log.error("[%s] No se pudo vender %s (intento %d/%d): %s",
+                  self.name, self.symbol, count, self.DUST_CLOSE_AFTER, err)
+        if count == 1:  # avisar solo la primera vez (evitar spam por ciclo)
+            self.notifier.send(f"⚠️ [{self.name}] No se pudo cerrar {self.symbol}: {err}")
+        if count < self.DUST_CLOSE_AFTER:
+            return
+        log.warning("[%s] Posición %s retirada como polvo (dust) tras %d intentos: "
+                    "cantidad invendible.", self.name, key, count)
+        self.store.close_position(position, position.entry_price, 0.0, "dust",
+                                  bot=self.name)
+        if position in self.risk.open_positions:
+            self.risk.open_positions.remove(position)
+        self.global_risk.register_close(position, 0.0)
+        self._close_failures.pop(key, None)
+        self.notifier.send(
+            f"🧹 [{self.name}] Posición en {self.symbol} retirada como polvo (dust): "
+            f"cantidad invendible tras {count} intentos. Queda como resto en la cuenta."
+        )
+
     def _finalize_close(self, position: Position, exit_price: float,
                         reason: str, slippage_note: str = "") -> None:
         """Contabiliza y persiste el cierre de una posición ya vendida."""
+        self._close_failures.pop(self._pos_key(position), None)
         pnl = self.risk.register_close(position, exit_price)
         self.global_risk.register_close(position, pnl)  # actualizar el riesgo global
         # Persistir el cierre y el nuevo estado diario.
@@ -628,6 +670,7 @@ class TradingEngine:
                 if today != current_day:
                     self.risk.reset_daily()
                     self.global_risk.reset_daily(today.isoformat())  # una vez por día
+                    self.client.sync_time()  # corregir la deriva del reloj a diario
                     self.store.save_daily_state(
                         today.isoformat(), self.risk.daily_pnl, self.risk.halted, bot=self.name
                     )

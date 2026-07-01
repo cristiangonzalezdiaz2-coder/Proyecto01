@@ -41,6 +41,30 @@ class MexcBaseClient:
         if api_key:
             self._session.headers.update({"X-MEXC-APIKEY": api_key})
         self._session.headers.update({"Content-Type": "application/json"})
+        # Desfase reloj local vs servidor. Si el reloj local deriva más que
+        # RECV_WINDOW (5 s), MEXC rechaza TODAS las peticiones firmadas, así
+        # que se sincroniza (perezosamente) antes de la primera.
+        self._time_offset_ms = 0
+        self._time_synced = False
+
+    # ------------------------------------------------------------------
+    def sync_time(self) -> None:
+        """Calcula el desfase con el reloj del servidor y lo aplica a los
+        timestamps de las peticiones firmadas. Si falla, se reintentará antes
+        de la siguiente petición firmada."""
+        try:
+            server = int(self.get("/api/v3/time")["serverTime"])
+        except (MexcError, KeyError, TypeError, ValueError) as exc:
+            log.warning("No se pudo sincronizar el reloj con MEXC: %s", exc)
+            return
+        self._time_offset_ms = server - int(time.time() * 1000)
+        self._time_synced = True
+        if abs(self._time_offset_ms) > 1000:
+            log.warning("Reloj local desfasado %+d ms respecto a MEXC; "
+                        "se aplica el ajuste.", self._time_offset_ms)
+        else:
+            log.info("Reloj sincronizado con MEXC (desfase %+d ms).",
+                     self._time_offset_ms)
 
     # ------------------------------------------------------------------
     def _sign(self, params: dict[str, Any]) -> str:
@@ -69,15 +93,18 @@ class MexcBaseClient:
         signed: bool = False,
     ) -> Any:
         base_params = dict(params or {})
-        if signed and (not self._api_key or not self._api_secret):
-            raise MexcError("Se requieren API key y secret para peticiones firmadas.")
+        if signed:
+            if not self._api_key or not self._api_secret:
+                raise MexcError("Se requieren API key y secret para peticiones firmadas.")
+            if not self._time_synced:
+                self.sync_time()
 
         url = f"{self.BASE_URL}{path}"
         for attempt in range(self.MAX_RETRIES + 1):
             # La firma incluye el timestamp, así que se regenera en cada intento.
             req_params = dict(base_params)
             if signed:
-                req_params["timestamp"] = int(time.time() * 1000)
+                req_params["timestamp"] = int(time.time() * 1000) + self._time_offset_ms
                 req_params["recvWindow"] = self.RECV_WINDOW
                 req_params["signature"] = self._sign(req_params)
 

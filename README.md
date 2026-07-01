@@ -43,6 +43,13 @@ modular preparada para añadir futuros más adelante. Incluye modo simulación
 - ✅ **Reintentos con backoff ante rate limits** (429/418) en el cliente MEXC;
   los errores de red/5xx solo se reintentan en peticiones de lectura para no
   duplicar órdenes.
+- ✅ **Sincronización de reloj con el servidor**: el desfase con MEXC se
+  calcula antes de la primera petición firmada (y se corrige a diario), para
+  que la deriva del reloj local no invalide las firmas (recvWindow de 5 s).
+- ✅ **Posiciones "dust" controladas**: si una cantidad es invendible (por
+  debajo del mínimo del par), tras varios intentos la posición se retira con
+  un cierre administrativo en vez de reintentar y notificar para siempre.
+- ✅ **CI con GitHub Actions**: la suite de tests corre en cada push.
 - ✅ **Riesgo global sin carreras**: la comprobación y la reserva de cupo son
   una única operación atómica, de modo que varios bots en paralelo no pueden
   exceder juntos los límites compartidos.
