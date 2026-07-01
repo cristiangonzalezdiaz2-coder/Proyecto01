@@ -24,9 +24,13 @@ from src.trading.engine import klines_to_df
 log = get_logger("backtest")
 
 
-def simulate(df, symbol: str, strategy) -> dict:
-    """Corre la estrategia vela a vela y devuelve métricas del resultado."""
-    risk = RiskManager(RiskConfig())
+def simulate(df, symbol: str, strategy, fee_pct: float | None = None) -> dict:
+    """Corre la estrategia vela a vela y devuelve métricas del resultado.
+
+    El PnL es neto de comisiones (`fee_pct` por lado; por defecto el de
+    RiskConfig, la tarifa taker de MEXC spot)."""
+    cfg = RiskConfig() if fee_pct is None else RiskConfig(fee_pct=fee_pct)
+    risk = RiskManager(cfg)
     trades = wins = 0
 
     for i in range(1, len(df)):
@@ -58,17 +62,18 @@ def fetch(symbol: str, interval: str, limit: int):
     return klines_to_df(client.get_klines(symbol, interval, limit=limit))
 
 
-def run_single(symbol, interval, limit, name, params):
+def run_single(symbol, interval, limit, name, params, fee_pct):
     df = fetch(symbol, interval, limit)
     strat = load_strategy(name, params)
-    res = simulate(df, symbol, strat)
+    res = simulate(df, symbol, strat, fee_pct)
     log.info("=== Backtest %s | %s %s (%d velas) ===", name, symbol, interval, len(df))
     log.info("Operaciones: %d | Ganadoras: %d (%.1f%%)", res["trades"], res["wins"], res["win_rate"])
-    log.info("PnL total (aprox, USDT): %.4f", res["pnl"])
-    log.info("NOTA: sin comisiones ni slippage. Solo orientativo.")
+    log.info("PnL total neto (aprox, USDT): %.4f", res["pnl"])
+    log.info("NOTA: incluye comisiones del %.3f%% por lado; sin slippage. "
+             "Solo orientativo.", fee_pct * 100)
 
 
-def run_compare(symbol, interval, limit):
+def run_compare(symbol, interval, limit, fee_pct):
     df = fetch(symbol, interval, limit)
     log.info("=== Comparativa de estrategias | %s %s (%d velas) ===", symbol, interval, len(df))
     log.info("%-14s %8s %8s %10s %12s", "estrategia", "ops", "aciertos", "% acierto", "PnL(USDT)")
@@ -76,7 +81,7 @@ def run_compare(symbol, interval, limit):
     rows = []
     for name in STRATEGIES:
         strat = load_strategy(name, {})  # parámetros por defecto de cada una
-        res = simulate(df, symbol, strat)
+        res = simulate(df, symbol, strat, fee_pct)
         rows.append((name, res))
     # Ordenar por PnL descendente.
     rows.sort(key=lambda r: r[1]["pnl"], reverse=True)
@@ -84,7 +89,8 @@ def run_compare(symbol, interval, limit):
         log.info("%-14s %8d %8d %9.1f%% %12.4f",
                  name, res["trades"], res["wins"], res["win_rate"], res["pnl"])
     log.info("-" * 56)
-    log.info("NOTA: sin comisiones ni slippage. Solo orientativo.")
+    log.info("NOTA: incluye comisiones del %.3f%% por lado; sin slippage. "
+             "Solo orientativo.", fee_pct * 100)
 
 
 def main() -> None:
@@ -98,13 +104,16 @@ def main() -> None:
                    help='Parámetros JSON, ej: \'{"period": 14}\'')
     p.add_argument("--compare", action="store_true",
                    help="Comparar todas las estrategias sobre los mismos datos")
+    p.add_argument("--fee", type=float, default=RiskConfig().fee_pct,
+                   help="Comisión por lado como fracción (0.0005 = 0.05%%). "
+                        "Usa 0 para ignorar comisiones.")
     args = p.parse_args()
 
     if args.compare:
-        run_compare(args.symbol, args.interval, args.limit)
+        run_compare(args.symbol, args.interval, args.limit, args.fee)
     else:
         params = json.loads(args.params)
-        run_single(args.symbol, args.interval, args.limit, args.strategy, params)
+        run_single(args.symbol, args.interval, args.limit, args.strategy, params, args.fee)
 
 
 if __name__ == "__main__":

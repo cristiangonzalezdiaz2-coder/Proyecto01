@@ -20,6 +20,10 @@ class RiskConfig:
     take_profit_pct: float = 0.04
     max_daily_loss: float = 50.0
     max_open_positions: int = 1
+    # Comisión del exchange por lado, como fracción (0.0005 = 0.05%, la tarifa
+    # taker de MEXC spot). Se descuenta del PnL de cada operación (compra y
+    # venta) en live, paper y backtest. Pon 0 para ignorar comisiones.
+    fee_pct: float = 0.0005
 
 
 @dataclass

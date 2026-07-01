@@ -324,7 +324,7 @@ class TradingEngine:
             f"{self.symbol}\n"
             f"Motivo: {reasons_es.get(reason, reason)}\n"
             f"Precio: <b>{exit_price:.2f}</b>\n"
-            f"PnL operación: <b>{pnl:+.4f}</b>\n"
+            f"PnL operación (neto): <b>{pnl:+.4f}</b>\n"
             f"PnL del día: {self.risk.daily_pnl:+.4f}"
             f"{slippage_note}"
         )

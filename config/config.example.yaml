@@ -59,6 +59,10 @@ risk:
   max_daily_loss: 50.0
   # Número máximo de posiciones abiertas simultáneas.
   max_open_positions: 1
+  # Comisión del exchange por lado, como fracción (0.0005 = 0.05%, la tarifa
+  # taker de MEXC spot). Se descuenta del PnL de cada operación en live, paper
+  # y backtest. Ajústala a la de tu cuenta; 0 para ignorar comisiones.
+  fee_pct: 0.0005
 
 # ============================================================
 #  RIESGO GLOBAL (opcional, recomendado con multi-bot)

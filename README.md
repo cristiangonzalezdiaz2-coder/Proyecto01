@@ -28,6 +28,9 @@ modular preparada para añadir futuros más adelante. Incluye modo simulación
 - ✅ **Verificación del estado de la orden**: una compra cancelada/rechazada no
   abre posición, una venta fallida deja la posición abierta y se reintenta, y
   las ejecuciones parciales se registran solo con lo realmente ejecutado.
+- ✅ **Comisiones incluidas en el PnL** (`fee_pct`, por defecto 0.05% por lado):
+  el PnL de cada operación es neto en live, paper, backtest y walk-forward
+  (`--fee` en el backtest para probar otras tarifas).
 - ✅ **Señales solo con velas cerradas**: la vela en formación se usa para el
   precio actual y los SL/TP, pero las estrategias solo ven velas cerradas y
   cada una se evalúa una única vez (igual que en el backtest).
@@ -187,8 +190,8 @@ OOS; el **OOS combinado** (lo que importa); y una **referencia de sobreajuste**
 referencia, esos parámetros están sobreajustados y no debes fiarte de ellos.
 
 > Elige los parámetros que rinden bien OOS de forma **consistente entre folds**,
-> no los que dieron el mayor PnL en un solo tramo. Los resultados no incluyen
-> comisiones ni slippage: son orientativos, no una garantía.
+> no los que dieron el mayor PnL en un solo tramo. Los resultados incluyen
+> comisiones (`fee_pct`) pero no slippage: son orientativos, no una garantía.
 
 ## Precisión por símbolo
 

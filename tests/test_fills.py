@@ -106,7 +106,10 @@ def _make_engine(tmp_path, monkeypatch) -> TradingEngine:
     monkeypatch.setattr(engine_mod, "MexcSpotClient", FakeClient)
     bot = BotConfig(
         name="t", symbol="BTCUSDT", interval="1h", poll_seconds=60,
-        strategy=StrategyConfig(), risk=RiskConfig(quote_per_trade=20.0),
+        strategy=StrategyConfig(),
+        # fee_pct=0 para verificar valores exactos de fill (las comisiones
+        # tienen sus propias pruebas en test_fees.py).
+        risk=RiskConfig(quote_per_trade=20.0, fee_pct=0.0),
     )
     cfg = AppConfig(api_key="k", api_secret="s", trading_mode="live",
                     bots=[bot], db_path=str(tmp_path / "t.db"))

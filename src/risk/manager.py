@@ -64,9 +64,15 @@ class RiskManager:
             return "take_profit"
         return None
 
+    def trade_fees(self, position: Position, exit_price: float) -> float:
+        """Comisiones estimadas de la operación completa (compra + venta)."""
+        return (position.entry_price + exit_price) * position.quantity * self.config.fee_pct
+
     def register_close(self, position: Position, exit_price: float) -> float:
-        """Cierra una posición, actualiza el PnL diario y aplica el límite."""
-        pnl = position.unrealized_pnl(exit_price)
+        """Cierra una posición, actualiza el PnL diario y aplica el límite.
+
+        El PnL devuelto es NETO: descuenta las comisiones de compra y venta."""
+        pnl = position.unrealized_pnl(exit_price) - self.trade_fees(position, exit_price)
         self.daily_pnl += pnl
         if position in self.open_positions:
             self.open_positions.remove(position)
