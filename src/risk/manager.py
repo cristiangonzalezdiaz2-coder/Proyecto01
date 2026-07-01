@@ -19,6 +19,8 @@ class Position:
     take_profit: float
     opened_at: str = field(default_factory=_now_iso)
     id: Optional[int] = None  # id en la base de datos (None si aún no persistida)
+    # Id de la orden LIMIT de take-profit colocada en el exchange (solo live).
+    tp_order_id: Optional[str] = None
 
     def unrealized_pnl(self, current_price: float) -> float:
         return (current_price - self.entry_price) * self.quantity

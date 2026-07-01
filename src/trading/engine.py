@@ -127,6 +127,8 @@ class TradingEngine:
 
         # Restaurar estado de una sesión anterior (posiciones abiertas + PnL diario).
         self._restore_state()
+        # En live, comprobar que el balance real respalda lo restaurado.
+        self._reconcile_live_positions()
 
         self.mode_label = "LIVE (dinero real)" if self.live else "PAPER (simulación)"
         log.info("[%s] Motor iniciado | modo=%s | símbolo=%s | estrategia=%s",
@@ -177,6 +179,172 @@ class TradingEngine:
             log.info("[%s] Estado diario restaurado: PnL=%.4f, bloqueado=%s",
                      self.name, self.risk.daily_pnl, self.risk.halted)
 
+    def _reconcile_live_positions(self) -> None:
+        """(live) Verifica que el balance del exchange respalda las posiciones
+        restauradas de la BD. Si falta saldo (se vendió a mano, otra app, etc.),
+        reduce la cantidad o descarta la posición, avisando siempre.
+
+        Cuenta el saldo libre MÁS el bloqueado (las órdenes TP nuestras retienen
+        saldo). Nota: si varios bots operan el mismo par, cada uno reconcilia
+        contra el balance común y podría haber doble conteo."""
+        if not self.live or not self.risk.open_positions:
+            return
+        if self.symbol_info is None:
+            log.warning("[%s] Sin info del símbolo: no se puede reconciliar el balance.",
+                        self.name)
+            return
+        base = self.symbol_info.base_asset
+        try:
+            free, locked = self.client.get_asset_balance(base)
+        except Exception as exc:  # noqa: BLE001 - no impedir el arranque
+            log.warning("[%s] No se pudo leer el balance de %s para reconciliar: %s",
+                        self.name, base, exc)
+            return
+
+        available = free + locked
+        adjustments: list[str] = []
+        for position in sorted(list(self.risk.open_positions), key=lambda p: p.id or 0):
+            if available >= position.quantity * (1 - 1e-9):
+                available -= position.quantity
+                continue
+            backed = self.symbol_info.floor_quantity(max(available, 0.0))
+            if backed > 0:
+                adjustments.append(
+                    f"posición {position.id}: cantidad {position.quantity:.8f} -> "
+                    f"{backed:.8f} {base} (saldo insuficiente)"
+                )
+                log.warning("[%s] Reconciliación: la posición %s se reduce de %.8f a "
+                            "%.8f %s (saldo insuficiente).", self.name, position.id,
+                            position.quantity, backed, base)
+                position.quantity = backed
+                self.store.update_position_quantity(position.id, backed)
+                available = 0.0
+            else:
+                adjustments.append(
+                    f"posición {position.id}: descartada ({position.quantity:.8f} {base} "
+                    f"sin respaldo en el balance)"
+                )
+                log.error("[%s] Reconciliación: la posición %s (%.8f %s) no tiene "
+                          "respaldo en el balance; se descarta del seguimiento.",
+                          self.name, position.id, position.quantity, base)
+                # Cierre administrativo: sin venta real, PnL 0 y motivo propio.
+                self.store.close_position(position, position.entry_price, 0.0,
+                                          "reconcile", bot=self.name)
+                self.risk.open_positions.remove(position)
+                self.global_risk.register_close(position, 0.0)
+        if adjustments:
+            self.notifier.send(
+                f"⚠️ <b>[{self.name}] Reconciliación de balances</b>\n"
+                f"El balance de {base} no respalda las posiciones restauradas:\n- "
+                + "\n- ".join(adjustments)
+            )
+        else:
+            log.info("[%s] Reconciliación OK: el balance de %s respalda las %d "
+                     "posición(es) restaurada(s).", self.name, base,
+                     len(self.risk.open_positions))
+
+    # ------------------------------------------------------------------
+    def _place_tp_order(self, position: Position) -> None:
+        """(live) Coloca el take-profit como orden LIMIT en el exchange.
+
+        Así el TP se ejecuta aunque el bot esté caído o sin red. MEXC spot v3
+        no admite órdenes stop, por lo que el stop-loss no puede delegarse al
+        exchange y se sigue vigilando localmente en cada ciclo. Si la orden no
+        se puede colocar, el TP también se vigilará localmente (fallback)."""
+        qty = position.quantity
+        tp_price = position.take_profit
+        if self.symbol_info is not None:
+            qty, err = self.symbol_info.check_sell_qty(qty)
+            if err:
+                log.warning("[%s] No se coloca TP en el exchange (%s); "
+                            "se vigilará localmente.", self.name, err)
+                return
+            tp_price = self.symbol_info.round_price(tp_price)
+        try:
+            resp = self.client.new_order(
+                symbol=self.symbol,
+                side="SELL",
+                order_type="LIMIT",
+                quantity=qty,
+                price=tp_price,
+            )
+        except MexcError as exc:
+            log.warning("[%s] No se pudo colocar el TP en el exchange (%s); "
+                        "se vigilará localmente.", self.name, exc)
+            return
+        order_id = str(resp.get("orderId") or "")
+        if not order_id:
+            log.warning("[%s] El exchange no devolvió id para la orden TP; "
+                        "se vigilará localmente.", self.name)
+            return
+        position.tp_order_id = order_id
+        self.store.set_tp_order(position.id, order_id)
+        log.info("[%s] TP colocado en el exchange: orden %s (%.8f @ %.2f)",
+                 self.name, order_id, qty, tp_price)
+
+    def _cancel_tp_order(self, position: Position) -> tuple[float, float] | None:
+        """Cancela la orden TP del exchange para liberar su saldo antes de vender.
+
+        Devuelve (cantidad, importe) ya ejecutados por esa orden antes de la
+        cancelación (0, 0 si nada), o None si no se pudo cancelar ni averiguar
+        su estado (el llamador debe reintentar en el próximo ciclo)."""
+        order_id = position.tp_order_id
+        try:
+            self.client.cancel_order(self.symbol, order_id)
+        except MexcError as exc:
+            # Pudo fallar porque la orden ya se ejecutó por completo.
+            try:
+                data = self.client.query_order(self.symbol, order_id)
+            except MexcError:
+                log.warning("[%s] No se pudo cancelar ni consultar la orden TP %s (%s); "
+                            "se reintentará.", self.name, order_id, exc)
+                return None
+            status = str(data.get("status") or "").upper()
+            if status not in ("FILLED", *_FAILED_STATUSES):
+                log.warning("[%s] No se pudo cancelar la orden TP %s (estado %s); "
+                            "se reintentará.", self.name, order_id, status)
+                return None
+        # Tras cancelar (o descubrir que ya terminó), mirar cuánto ejecutó.
+        executed_qty = executed_quote = 0.0
+        try:
+            data = self.client.query_order(self.symbol, order_id)
+            executed_qty = float(data.get("executedQty") or 0)
+            executed_quote = float(data.get("cummulativeQuoteQty") or 0)
+        except MexcError:
+            pass  # sin datos: asumimos que no ejecutó nada
+        position.tp_order_id = None
+        self.store.set_tp_order(position.id, None)
+        return executed_qty, executed_quote
+
+    def _check_exchange_tp(self) -> None:
+        """(live) Detecta órdenes TP del exchange ya ejecutadas (quizá mientras
+        el bot estaba caído) y contabiliza sus cierres."""
+        for position in list(self.risk.open_positions):
+            if not position.tp_order_id:
+                continue
+            try:
+                data = self.client.query_order(self.symbol, position.tp_order_id)
+            except MexcError as exc:
+                log.warning("[%s] No se pudo consultar la orden TP %s: %s",
+                            self.name, position.tp_order_id, exc)
+                continue
+            status = str(data.get("status") or "").upper()
+            if status == "FILLED":
+                qty = float(data.get("executedQty") or 0)
+                quote = float(data.get("cummulativeQuoteQty") or 0)
+                exit_price = quote / qty if qty > 0 and quote > 0 else position.take_profit
+                position.tp_order_id = None
+                self.store.set_tp_order(position.id, None)
+                self._finalize_close(position, exit_price, "take_profit",
+                                     "\n(ejecutado por la orden TP del exchange)")
+            elif status in _FAILED_STATUSES:
+                # La orden desapareció (p. ej. cancelada a mano): recolocarla.
+                log.warning("[%s] La orden TP %s ya no está activa (%s); se recoloca.",
+                            self.name, position.tp_order_id, status)
+                position.tp_order_id = None
+                self.store.set_tp_order(position.id, None)
+                self._place_tp_order(position)
+
     # ------------------------------------------------------------------
     def _market_buy(self, price: float) -> Position | None:
         quote_amount = self.bot.risk.quote_per_trade
@@ -189,8 +357,9 @@ class TradingEngine:
                 self.notifier.send(f"⚠️ [{self.name}] Compra omitida en {self.symbol}: {err}")
                 return None
 
-        # Validar contra los límites de riesgo GLOBAL (compartidos entre bots).
-        ok, gerr = self.global_risk.can_open(quote_amount)
+        # Reservar cupo en el riesgo GLOBAL de forma atómica (comprobar y
+        # apartar en una sola operación evita que dos bots excedan el límite).
+        ok, gerr = self.global_risk.reserve(quote_amount)
         if not ok:
             log.info("[%s] Compra omitida por riesgo global: %s", self.name, gerr)
             return None
@@ -200,16 +369,21 @@ class TradingEngine:
         slippage_note = ""
 
         if self.live:
-            resp = self.client.new_order(
-                symbol=self.symbol,
-                side="BUY",
-                order_type="MARKET",
-                quote_order_qty=quote_amount,
-            )
+            try:
+                resp = self.client.new_order(
+                    symbol=self.symbol,
+                    side="BUY",
+                    order_type="MARKET",
+                    quote_order_qty=quote_amount,
+                )
+            except Exception:
+                self.global_risk.release(quote_amount)  # la orden no se envió
+                raise
             log.info("[%s] Orden BUY real enviada: %s", self.name, resp)
             outcome = resolve_order_outcome(self.client, self.symbol, resp)
             if outcome.failed:
                 # La orden terminó sin ejecutar nada: no hay posición que abrir.
+                self.global_risk.release(quote_amount)
                 log.error("[%s] Orden BUY no ejecutada (estado %s): no se abre posición.",
                           self.name, outcome.status)
                 self.notifier.send(
@@ -243,7 +417,12 @@ class TradingEngine:
                      self.name, position.quantity, price, position.stop_loss, position.take_profit)
         self.risk.register_open(position)
         self.store.add_position(position, bot=self.name)  # persistir la posición abierta
-        self.global_risk.register_open(position)  # contabilizar en el riesgo global
+        self.global_risk.confirm(position, quote_amount)  # reserva -> compromiso real
+        if self.live:
+            # Colocar el take-profit como orden LIMIT en el exchange, para que
+            # se ejecute aunque el bot esté caído. (MEXC spot no admite órdenes
+            # stop, así que el stop-loss se sigue vigilando localmente.)
+            self._place_tp_order(position)
         self.notifier.send(
             f"🟢 <b>COMPRA</b> [{self.name}] ({self.mode_label})\n"
             f"{self.symbol}\n"
@@ -258,9 +437,24 @@ class TradingEngine:
     def _market_sell(self, position: Position, price: float, reason: str) -> None:
         exit_price = price
         slippage_note = ""
+        tp_sold_qty = tp_sold_quote = 0.0  # parte ya vendida por la orden TP cancelada
         if self.live:
+            # Si hay una orden TP en el exchange, cancelarla primero para
+            # liberar el saldo que tiene retenido.
+            if position.tp_order_id:
+                canceled = self._cancel_tp_order(position)
+                if canceled is None:
+                    return  # no se pudo cancelar ni aclarar: reintentar en el próximo ciclo
+                tp_sold_qty, tp_sold_quote = canceled
+                if tp_sold_qty > 0 and position.quantity - tp_sold_qty <= 0:
+                    # La orden TP ya lo había vendido todo.
+                    self._finalize_close(position, tp_sold_quote / tp_sold_qty,
+                                         "take_profit",
+                                         "\n(ejecutado por la orden TP del exchange)")
+                    return
+
             # Ajustar la cantidad a la precisión del símbolo antes de vender.
-            sell_qty = position.quantity
+            sell_qty = position.quantity - tp_sold_qty
             if self.symbol_info is not None:
                 sell_qty, err = self.symbol_info.check_sell_qty(sell_qty)
                 if err:
@@ -287,24 +481,33 @@ class TradingEngine:
                 return
             if outcome.filled:
                 slippage_pct = (outcome.avg_price / price - 1) * 100
-                exit_price = outcome.avg_price
                 slippage_note = f"\nSlippage: {slippage_pct:+.4f}%"
                 log.info("[%s] Fill real SELL: @ %.8f | slippage=%+.4f%%",
                          self.name, outcome.avg_price, slippage_pct)
                 if outcome.partial:
                     # Solo se vendió una parte: el PnL se calcula sobre lo
                     # realmente vendido; el resto queda sin vender en la cuenta.
-                    remainder = position.quantity - outcome.executed_qty
-                    position.quantity = outcome.executed_qty
+                    remainder = position.quantity - tp_sold_qty - outcome.executed_qty
+                    position.quantity = tp_sold_qty + outcome.executed_qty
                     log.warning("[%s] Venta PARCIAL (%s): vendidas %.8f, quedan %.8f "
                                 "sin vender en la cuenta.", self.name, outcome.status,
                                 outcome.executed_qty, remainder)
                     slippage_note += (f"\n⚠️ Venta parcial: {remainder:.8f} "
                                       f"sin vender en la cuenta")
+                # Precio de salida: media ponderada de lo vendido por la orden
+                # TP (si vendió algo antes de cancelarse) y la venta MARKET.
+                total_qty = tp_sold_qty + outcome.executed_qty
+                exit_price = (tp_sold_quote
+                              + outcome.avg_price * outcome.executed_qty) / total_qty
             else:
                 log.warning("[%s] La orden SELL no reporta ejecución (estado '%s'); el "
                             "PnL se calcula con el precio de la vela (%.2f).",
                             self.name, outcome.status, price)
+        self._finalize_close(position, exit_price, reason, slippage_note)
+
+    def _finalize_close(self, position: Position, exit_price: float,
+                        reason: str, slippage_note: str = "") -> None:
+        """Contabiliza y persiste el cierre de una posición ya vendida."""
         pnl = self.risk.register_close(position, exit_price)
         self.global_risk.register_close(position, pnl)  # actualizar el riesgo global
         # Persistir el cierre y el nuevo estado diario.
@@ -344,13 +547,20 @@ class TradingEngine:
         df = klines_to_df(raw)
         price = float(df["close"].iloc[-1])  # precio actual (vela en formación)
 
-        # 1) Revisar salidas de posiciones abiertas (SL/TP) con el precio actual.
+        # 1) (live) ¿Alguna orden TP del exchange se ejecutó (quizá estando
+        #    el bot caído)? Contabilizar esos cierres primero.
+        if self.live:
+            self._check_exchange_tp()
+
+        # 2) Revisar salidas de posiciones abiertas (SL/TP) con el precio actual.
         for position in list(self.risk.open_positions):
             reason = self.risk.should_close(position, price)
+            if reason == "take_profit" and position.tp_order_id:
+                continue  # el TP lo ejecuta la orden LIMIT del exchange
             if reason:
                 self._market_sell(position, price, reason)
 
-        # 2) Evaluar la estrategia SOLO con velas cerradas: la última vela de
+        # 3) Evaluar la estrategia SOLO con velas cerradas: la última vela de
         #    MEXC es la que está en formación y sus señales pueden deshacerse
         #    antes del cierre (así, además, live coincide con el backtest).
         #    Cada vela cerrada se evalúa una única vez para no repetir la

@@ -54,21 +54,65 @@ class GlobalRiskManager:
                          self.exposure, self.open_count, self.daily_pnl, self.halted)
 
     # ------------------------------------------------------------------
+    def _check_locked(self, quote_amount: float) -> str | None:
+        """Comprueba los límites. Debe llamarse con el lock adquirido."""
+        if self.halted:
+            return "límite de pérdida diaria global alcanzado"
+        c = self.config
+        if c.max_open_positions and self.open_count >= c.max_open_positions:
+            return (f"máximo global de posiciones abiertas "
+                    f"({c.max_open_positions}) alcanzado")
+        if c.max_total_exposure and (self.exposure + quote_amount) > c.max_total_exposure:
+            return (f"exposición {self.exposure + quote_amount:.2f} superaría "
+                    f"el máximo global {c.max_total_exposure:.2f}")
+        return None
+
     def can_open(self, quote_amount: float) -> tuple[bool, str | None]:
-        """¿Permiten los límites globales abrir una posición de `quote_amount`?"""
+        """¿Permiten los límites globales abrir una posición de `quote_amount`?
+
+        Solo informativo: para abrir de verdad usa `reserve()`, que comprueba
+        y aparta el cupo en una única operación atómica."""
         if not self.config.enabled:
             return True, None
         with self._lock:
-            if self.halted:
-                return False, "límite de pérdida diaria global alcanzado"
-            c = self.config
-            if c.max_open_positions and self.open_count >= c.max_open_positions:
-                return False, (f"máximo global de posiciones abiertas "
-                               f"({c.max_open_positions}) alcanzado")
-            if c.max_total_exposure and (self.exposure + quote_amount) > c.max_total_exposure:
-                return False, (f"exposición {self.exposure + quote_amount:.2f} superaría "
-                               f"el máximo global {c.max_total_exposure:.2f}")
+            err = self._check_locked(quote_amount)
+            return err is None, err
+
+    def reserve(self, quote_amount: float) -> tuple[bool, str | None]:
+        """Comprueba los límites Y aparta el cupo en una sola operación atómica.
+
+        Evita la carrera en la que dos bots pasan la comprobación a la vez y
+        entre ambos exceden el límite. Si la orden luego no se ejecuta, hay que
+        devolver el cupo con `release()`; si se ejecuta, confirmarlo con
+        `confirm()` para ajustar la reserva al importe real."""
+        if not self.config.enabled:
             return True, None
+        with self._lock:
+            err = self._check_locked(quote_amount)
+            if err is not None:
+                return False, err
+            self.exposure += quote_amount
+            self.open_count += 1
+            return True, None
+
+    def release(self, quote_amount: float) -> None:
+        """Devuelve una reserva cuya orden no llegó a ejecutarse."""
+        if not self.config.enabled:
+            return
+        with self._lock:
+            self.exposure = max(0.0, self.exposure - quote_amount)
+            self.open_count = max(0, self.open_count - 1)
+
+    def confirm(self, position: Position, reserved_amount: float) -> None:
+        """Sustituye el importe reservado por el compromiso real de la posición
+        (el fill puede diferir ligeramente de lo reservado)."""
+        if not self.config.enabled:
+            return
+        with self._lock:
+            amount = self._committed_amount(position)
+            if position.id is not None:
+                self._committed[position.id] = amount
+            self.exposure = max(0.0, self.exposure + amount - reserved_amount)
 
     def register_open(self, position: Position) -> None:
         if not self.config.enabled:

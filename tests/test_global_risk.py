@@ -1,4 +1,6 @@
 """Pruebas del gestor de riesgo global compartido entre bots."""
+import threading
+
 import yaml
 
 from src.config import GlobalRiskConfig, load_config
@@ -75,6 +77,53 @@ def test_reset_daily_idempotent_per_day():
     gr.register_open(p2); gr.register_close(p2, -3.0)
     gr.reset_daily("2026-07-02")  # mismo día -> no resetea
     assert gr.snapshot()["daily_pnl"] == -3.0
+
+
+# ------------------- Reserva atómica (reserve/confirm/release) -------------------
+def test_reserve_is_atomic_check_and_hold():
+    gr = GlobalRiskManager(GlobalRiskConfig(enabled=True, max_total_exposure=50))
+    ok, _ = gr.reserve(30)
+    assert ok and gr.snapshot()["exposure"] == 30
+    ok, err = gr.reserve(30)  # 30 + 30 > 50: la reserva anterior ya cuenta
+    assert not ok and "exposición" in err
+    gr.release(30)
+    assert gr.snapshot()["exposure"] == 0
+    assert gr.reserve(30)[0]
+
+
+def test_confirm_adjusts_reservation_to_real_fill():
+    gr = GlobalRiskManager(GlobalRiskConfig(enabled=True, max_total_exposure=100))
+    gr.reserve(30)
+    p = _pos(28, 1, pid=7)  # el fill real comprometió 28, no los 30 reservados
+    gr.confirm(p, 30)
+    snap = gr.snapshot()
+    assert snap["exposure"] == 28 and snap["open_count"] == 1
+    gr.register_close(p, 1.0)
+    snap = gr.snapshot()
+    assert snap["exposure"] == 0 and snap["open_count"] == 0
+
+
+def test_reserve_respects_max_open_positions():
+    gr = GlobalRiskManager(GlobalRiskConfig(enabled=True, max_open_positions=1))
+    assert gr.reserve(10)[0]
+    ok, err = gr.reserve(10)
+    assert not ok and "posiciones" in err
+
+
+def test_concurrent_reserves_never_exceed_limit():
+    gr = GlobalRiskManager(GlobalRiskConfig(enabled=True, max_open_positions=5))
+    results = []
+
+    def worker():
+        results.append(gr.reserve(1)[0])
+
+    threads = [threading.Thread(target=worker) for _ in range(20)]
+    for t in threads:
+        t.start()
+    for t in threads:
+        t.join()
+    assert sum(results) == 5  # exactamente 5 reservas aceptadas, ni una más
+    assert gr.snapshot()["open_count"] == 5
 
 
 def test_config_parsing(tmp_path):

@@ -45,11 +45,16 @@ class MexcSpotClient(MexcBaseClient):
 
     def get_balance(self, asset: str) -> float:
         """Balance libre de un activo concreto, ej. 'USDT'."""
+        return self.get_asset_balance(asset)[0]
+
+    def get_asset_balance(self, asset: str) -> tuple[float, float]:
+        """(free, locked) de un activo. `locked` es lo retenido en órdenes
+        abiertas (p. ej. una venta LIMIT de take-profit)."""
         data = self.account()
         for bal in data.get("balances", []):
             if bal["asset"] == asset:
-                return float(bal["free"])
-        return 0.0
+                return float(bal.get("free") or 0), float(bal.get("locked") or 0)
+        return 0.0, 0.0
 
     def new_order(
         self,

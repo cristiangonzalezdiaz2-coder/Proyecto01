@@ -31,6 +31,19 @@ modular preparada para añadir futuros más adelante. Incluye modo simulación
 - ✅ **Comisiones incluidas en el PnL** (`fee_pct`, por defecto 0.05% por lado):
   el PnL de cada operación es neto en live, paper, backtest y walk-forward
   (`--fee` en el backtest para probar otras tarifas).
+- ✅ **Take-profit en el propio exchange** (live): tras cada compra se coloca
+  una orden LIMIT de venta en MEXC, que se ejecuta aunque el bot esté caído.
+  (La API spot v3 de MEXC no admite órdenes stop, así que el stop-loss se
+  vigila localmente en cada ciclo.)
+- ✅ **Reconciliación de balances al reiniciar** (live): si el balance real no
+  respalda una posición restaurada (venta manual, otra app...), se reduce o
+  descarta con aviso, en vez de operar sobre datos falsos.
+- ✅ **Reintentos con backoff ante rate limits** (429/418) en el cliente MEXC;
+  los errores de red/5xx solo se reintentan en peticiones de lectura para no
+  duplicar órdenes.
+- ✅ **Riesgo global sin carreras**: la comprobación y la reserva de cupo son
+  una única operación atómica, de modo que varios bots en paralelo no pueden
+  exceder juntos los límites compartidos.
 - ✅ **Señales solo con velas cerradas**: la vela en formación se usa para el
   precio actual y los SL/TP, pero las estrategias solo ven velas cerradas y
   cada una se evalúa una única vez (igual que en el backtest).

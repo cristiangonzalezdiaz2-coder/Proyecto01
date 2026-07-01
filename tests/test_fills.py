@@ -40,6 +40,9 @@ class FakeClient:
             raise MexcError("orden no encontrada")
         return self.query_responses.pop(0)
 
+    def cancel_order(self, symbol, order_id):
+        return {}
+
 
 # --------------------------- resolve_order_outcome ---------------------------
 def test_fill_from_immediate_response():
