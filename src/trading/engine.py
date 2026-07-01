@@ -244,6 +244,30 @@ class TradingEngine:
                      len(self.risk.open_positions))
 
     # ------------------------------------------------------------------
+    def _sellable_qty(self, qty: float) -> float:
+        """(live) Limita una cantidad a vender al saldo libre real del activo base.
+
+        MEXC cobra la comisión de las compras MARKET en el activo comprado, así
+        que el saldo real queda ligeramente por debajo del executedQty de la
+        compra; ofrecer o vender la cantidad completa sería rechazado por saldo
+        insuficiente. Si no se puede leer el balance, se usa la cantidad pedida."""
+        if self.symbol_info is None:
+            return qty
+        base = self.symbol_info.base_asset
+        try:
+            free = self.client.get_balance(base)
+        except Exception as exc:  # noqa: BLE001
+            log.warning("[%s] No se pudo leer el saldo libre de %s (%s); "
+                        "se usa la cantidad completa.", self.name, base, exc)
+            return qty
+        if free < qty:
+            capped = self.symbol_info.floor_quantity(free)
+            log.info("[%s] Cantidad ajustada al saldo libre: %.8f -> %.8f %s "
+                     "(comisión cobrada en el activo base).",
+                     self.name, qty, capped, base)
+            return capped
+        return qty
+
     def _place_tp_order(self, position: Position) -> None:
         """(live) Coloca el take-profit como orden LIMIT en el exchange.
 
@@ -251,7 +275,7 @@ class TradingEngine:
         no admite órdenes stop, por lo que el stop-loss no puede delegarse al
         exchange y se sigue vigilando localmente en cada ciclo. Si la orden no
         se puede colocar, el TP también se vigilará localmente (fallback)."""
-        qty = position.quantity
+        qty = self._sellable_qty(position.quantity)
         tp_price = position.take_profit
         if self.symbol_info is not None:
             qty, err = self.symbol_info.check_sell_qty(qty)
@@ -453,8 +477,9 @@ class TradingEngine:
                                          "\n(ejecutado por la orden TP del exchange)")
                     return
 
-            # Ajustar la cantidad a la precisión del símbolo antes de vender.
-            sell_qty = position.quantity - tp_sold_qty
+            # Ajustar la cantidad al saldo libre real y a la precisión del
+            # símbolo antes de vender.
+            sell_qty = self._sellable_qty(position.quantity - tp_sold_qty)
             if self.symbol_info is not None:
                 sell_qty, err = self.symbol_info.check_sell_qty(sell_qty)
                 if err:

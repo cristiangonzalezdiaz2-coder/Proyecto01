@@ -34,7 +34,9 @@ modular preparada para añadir futuros más adelante. Incluye modo simulación
 - ✅ **Take-profit en el propio exchange** (live): tras cada compra se coloca
   una orden LIMIT de venta en MEXC, que se ejecuta aunque el bot esté caído.
   (La API spot v3 de MEXC no admite órdenes stop, así que el stop-loss se
-  vigila localmente en cada ciclo.)
+  vigila localmente en cada ciclo.) Las cantidades a vender se ajustan al
+  saldo libre real: MEXC cobra la comisión de las compras MARKET en el
+  activo comprado, y ofrecer la cantidad completa sería rechazado.
 - ✅ **Reconciliación de balances al reiniciar** (live): si el balance real no
   respalda una posición restaurada (venta manual, otra app...), se reduce o
   descarta con aviso, en vez de operar sobre datos falsos.
