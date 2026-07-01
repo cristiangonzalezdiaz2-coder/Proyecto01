@@ -1,5 +1,5 @@
 """Estrategias de trading."""
-from .base import Signal, Strategy
+from .base import Signal, Strategy, compute_signals
 from .bollinger import BollingerStrategy
 from .macd import MACDStrategy
 from .ma_crossover import MACrossoverStrategy
@@ -25,6 +25,7 @@ def load_strategy(name: str, params: dict) -> Strategy:
 __all__ = [
     "Signal",
     "Strategy",
+    "compute_signals",
     "MACrossoverStrategy",
     "RSIStrategy",
     "MACDStrategy",

@@ -10,7 +10,7 @@ Para evitar señales repetidas, operamos en el CRUCE de salida de esas zonas:
 """
 import pandas as pd
 
-from .base import Signal, Strategy
+from .base import Signal, Strategy, crossings_to_signals
 
 
 def compute_rsi(close: pd.Series, period: int) -> pd.Series:
@@ -53,3 +53,12 @@ class RSIStrategy(Strategy):
         if prev >= self.overbought and now < self.overbought:
             return Signal.SELL
         return Signal.HOLD
+
+    def generate_signals(self, candles: pd.DataFrame) -> list[Signal]:
+        """Versión vectorizada (O(n)): mismas señales que generate_signal."""
+        rsi = compute_rsi(candles["close"], self.period)
+        prev = rsi.shift(1)
+        buy = (prev <= self.oversold) & (rsi > self.oversold)
+        sell = (prev >= self.overbought) & (rsi < self.overbought)
+        # Guarda de historia mínima: len < period + 2 -> HOLD.
+        return crossings_to_signals(buy, sell, min_index=self.period + 1)

@@ -19,7 +19,7 @@ from src.config import RiskConfig, validate_risk
 from src.logger import get_logger
 from src.mexc import MexcSpotClient
 from src.risk import RiskManager
-from src.strategies import STRATEGIES, Signal, load_strategy
+from src.strategies import STRATEGIES, Signal, compute_signals, load_strategy
 from src.trading.engine import klines_to_df
 
 log = get_logger("backtest")
@@ -42,10 +42,12 @@ def simulate(df, symbol: str, strategy, fee_pct: float | None = None,
     risk = RiskManager(cfg)
     trades = wins = 0
     equity = cfg.paper_balance  # solo se usa con sizing dinámico
+    # Señales precalculadas en una pasada (vectorizado si la estrategia lo
+    # permite): O(n) en vez de recomputar indicadores por ventana (O(n²)).
+    signals = compute_signals(strategy, df)
 
     for i in range(1, len(df)):
-        window = df.iloc[: i + 1]
-        candle = window.iloc[-1]
+        candle = df.iloc[i]
         price = float(candle["close"])
 
         # Salidas por SL/TP contra el RANGO de la vela (high/low), no solo el
@@ -66,7 +68,7 @@ def simulate(df, symbol: str, strategy, fee_pct: float | None = None,
         for pos in risk.open_positions:
             risk.update_trailing(pos, float(candle["high"]))
 
-        signal = strategy.generate_signal(window)
+        signal = signals[i]
         if signal == Signal.BUY and risk.can_open():
             committed = sum(p.entry_price * p.quantity for p in risk.open_positions)
             size = risk.position_size(max(equity - committed, 0.0))

@@ -21,7 +21,7 @@ import pandas as pd
 from ..analytics import compute_metrics
 from ..config import RiskConfig
 from ..risk import RiskManager
-from ..strategies import Signal, load_strategy
+from ..strategies import Signal, compute_signals, load_strategy
 
 
 # Rejillas de parámetros por defecto para cada estrategia.
@@ -82,38 +82,48 @@ def _objective_value(metrics: dict, objective: str, min_trades: int) -> float:
 
 
 def run_segment(df_full: pd.DataFrame, symbol: str, strategy,
-                open_start: int, open_end: int) -> list[float]:
+                open_start: int, open_end: int,
+                signals: list | None = None) -> list[float]:
     """Simula la estrategia permitiendo ABRIR solo en [open_start, open_end).
 
     Los indicadores usan todo el historial hasta cada vela (nada de futuro),
     pero las entradas se restringen al segmento evaluado, de modo que el
     resultado se atribuye limpiamente a ese tramo. Las posiciones que queden
     abiertas al final del segmento se cierran al último precio.
+
+    `signals` permite pasar las señales por vela ya calculadas (una por
+    índice de df_full); si no se pasan, se calculan aquí en una sola pasada
+    vectorizada (O(n) en vez del O(n²) de las ventanas crecientes).
     """
     risk = RiskManager(RiskConfig())
     pnls: list[float] = []
+    if signals is None:
+        signals = compute_signals(strategy, df_full)
+    opens = df_full["open"].to_numpy(dtype=float)
+    highs = df_full["high"].to_numpy(dtype=float)
+    lows = df_full["low"].to_numpy(dtype=float)
+    closes = df_full["close"].to_numpy(dtype=float)
+
     last_price = None
     for i in range(1, open_end):
-        window = df_full.iloc[: i + 1]
-        candle = window.iloc[-1]
-        price = float(candle["close"])
+        price = float(closes[i])
         last_price = price
 
         # Salidas por SL/TP contra el RANGO de la vela (permitidas siempre).
         for pos in list(risk.open_positions):
-            exit_ = risk.check_candle_exit(pos, float(candle["open"]),
-                                           float(candle["high"]), float(candle["low"]))
+            exit_ = risk.check_candle_exit(pos, float(opens[i]),
+                                           float(highs[i]), float(lows[i]))
             if exit_:
                 _reason, exit_price = exit_
                 pnls.append(risk.register_close(pos, exit_price))
 
         # Trailing stop (si está activo): efectivo desde la vela siguiente.
         for pos in risk.open_positions:
-            risk.update_trailing(pos, float(candle["high"]))
+            risk.update_trailing(pos, float(highs[i]))
 
         # Entradas solo dentro del segmento evaluado.
         if open_start <= i < open_end:
-            signal = strategy.generate_signal(window)
+            signal = signals[i]
             if signal == Signal.BUY and risk.can_open():
                 risk.register_open(risk.build_position(symbol, price))
             elif signal == Signal.SELL:
@@ -127,11 +137,10 @@ def run_segment(df_full: pd.DataFrame, symbol: str, strategy,
     return pnls
 
 
-def _best_params(df, symbol, strategy_name, combos, start, end, objective, min_trades):
+def _best_params(df, symbol, combos, signals_by_combo, start, end, objective, min_trades):
     best = None
-    for params in combos:
-        strat = load_strategy(strategy_name, params)
-        pnls = run_segment(df, symbol, strat, start, end)
+    for params, signals in zip(combos, signals_by_combo):
+        pnls = run_segment(df, symbol, None, start, end, signals=signals)
         metrics = _metrics_from_pnls(pnls)
         score = _objective_value(metrics, objective, min_trades)
         if best is None or score > best["score"]:
@@ -156,6 +165,13 @@ def walk_forward(df: pd.DataFrame, symbol: str, strategy_name: str,
     if not combos:
         raise ValueError("La rejilla no produce ninguna combinación válida.")
 
+    # Precalcular las señales de cada combinación UNA sola vez (vectorizado):
+    # todos los folds reutilizan la misma lista, en vez de recomputar los
+    # indicadores con ventanas crecientes en cada tramo (O(n²) -> O(n)).
+    signals_by_combo = [
+        compute_signals(load_strategy(strategy_name, params), df) for params in combos
+    ]
+
     n = len(df)
     seg = n // (folds + 1)
     if seg < 20:
@@ -171,11 +187,12 @@ def walk_forward(df: pd.DataFrame, symbol: str, strategy_name: str,
         test_start = train_end
         test_end = (train_end + seg) if f < folds - 1 else n
 
-        best = _best_params(df, symbol, strategy_name, combos,
+        best = _best_params(df, symbol, combos, signals_by_combo,
                             train_start, train_end, objective, min_trades)
         # Evaluar los mejores parámetros en el tramo OOS.
-        strat = load_strategy(strategy_name, best["params"])
-        oos_pnls = run_segment(df, symbol, strat, test_start, test_end)
+        best_signals = signals_by_combo[combos.index(best["params"])]
+        oos_pnls = run_segment(df, symbol, None, test_start, test_end,
+                               signals=best_signals)
         oos_metrics = _metrics_from_pnls(oos_pnls)
         all_oos_pnls.extend(oos_pnls)
 
@@ -189,7 +206,8 @@ def walk_forward(df: pd.DataFrame, symbol: str, strategy_name: str,
         })
 
     # Referencia de sobreajuste: optimizar sobre TODO el histórico.
-    overfit = _best_params(df, symbol, strategy_name, combos, 0, n, objective, min_trades)
+    overfit = _best_params(df, symbol, combos, signals_by_combo, 0, n,
+                           objective, min_trades)
 
     return {
         "symbol": symbol,
