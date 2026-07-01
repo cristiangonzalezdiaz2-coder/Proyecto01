@@ -10,6 +10,7 @@ Soporta dos modos:
 """
 import threading
 import time
+from dataclasses import dataclass
 from datetime import datetime, timezone
 
 import pandas as pd
@@ -29,36 +30,66 @@ def _today_str() -> str:
     return datetime.now(timezone.utc).date().isoformat()
 
 
-def resolve_order_fill(client: MexcSpotClient, symbol: str, resp: dict,
-                       attempts: int = 5, delay: float = 0.5) -> tuple[float, float] | None:
-    """Obtiene el fill real de una orden: (precio medio, cantidad ejecutada).
+# Estados en los que la orden ya no va a ejecutar nada más.
+_FAILED_STATUSES = {"CANCELED", "PARTIALLY_CANCELED", "REJECTED", "EXPIRED"}
 
-    Primero mira la respuesta inmediata de la orden; si aún no trae los campos
-    de ejecución (las órdenes MARKET de MEXC pueden responder antes de
-    ejecutarse), consulta la orden hasta `attempts` veces. Devuelve None si no
-    se pudo determinar el fill: el llamador debe usar su estimación y avisar.
+
+@dataclass
+class OrderOutcome:
+    """Resultado verificado de una orden: estado y ejecución real."""
+    status: str = ""              # último estado conocido ("" si no se pudo saber)
+    avg_price: float | None = None
+    executed_qty: float = 0.0
+
+    @property
+    def filled(self) -> bool:
+        """Hay ejecución real (total o parcial) con precio medio conocido."""
+        return self.avg_price is not None and self.executed_qty > 0
+
+    @property
+    def failed(self) -> bool:
+        """La orden terminó sin ejecutar NADA: no hay nada que registrar."""
+        return not self.filled and self.status in _FAILED_STATUSES
+
+    @property
+    def partial(self) -> bool:
+        """Terminó ejecutando solo una parte (el resto se canceló)."""
+        return self.filled and self.status == "PARTIALLY_CANCELED"
+
+
+def resolve_order_outcome(client: MexcSpotClient, symbol: str, resp: dict,
+                          attempts: int = 5, delay: float = 0.5) -> OrderOutcome:
+    """Verifica el resultado real de una orden: estado, precio medio y cantidad.
+
+    Primero mira la respuesta inmediata; si aún no trae la ejecución (las
+    órdenes MARKET de MEXC pueden responder antes de ejecutarse), consulta la
+    orden hasta `attempts` veces. Deja de consultar en cuanto hay fill o la
+    orden alcanza un estado terminal fallido (cancelada/rechazada). Si tras los
+    intentos no se sabe nada, devuelve un OrderOutcome vacío (ni filled ni
+    failed): el llamador debe usar su estimación y avisar.
     """
-    def _parse(data: dict) -> tuple[float, float] | None:
+    def _parse(data: dict) -> OrderOutcome:
+        status = str(data.get("status") or "").upper()
         try:
             qty = float(data.get("executedQty") or 0)
             quote = float(data.get("cummulativeQuoteQty") or 0)
         except (TypeError, ValueError):
-            return None
+            qty = quote = 0.0
         if qty > 0 and quote > 0:
-            return quote / qty, qty
-        return None
+            return OrderOutcome(status=status, avg_price=quote / qty, executed_qty=qty)
+        return OrderOutcome(status=status)
 
-    fill = _parse(resp)
+    outcome = _parse(resp)
     order_id = resp.get("orderId")
     for _ in range(attempts):
-        if fill is not None or order_id is None:
+        if outcome.filled or outcome.failed or order_id is None:
             break
         time.sleep(delay)
         try:
-            fill = _parse(client.query_order(symbol, order_id))
+            outcome = _parse(client.query_order(symbol, order_id))
         except MexcError as exc:
             log.warning("No se pudo consultar la orden %s de %s: %s", order_id, symbol, exc)
-    return fill
+    return outcome
 
 
 def klines_to_df(raw: list[list]) -> pd.DataFrame:
@@ -176,13 +207,18 @@ class TradingEngine:
                 quote_order_qty=quote_amount,
             )
             log.info("[%s] Orden BUY real enviada: %s", self.name, resp)
-            fill = resolve_order_fill(self.client, self.symbol, resp)
-            if fill is None:
-                log.warning("[%s] La orden BUY no reporta ejecución; la posición se "
-                            "registra con el precio de la vela (%.2f) como estimación.",
-                            self.name, price)
-            else:
-                fill_price, fill_qty = fill
+            outcome = resolve_order_outcome(self.client, self.symbol, resp)
+            if outcome.failed:
+                # La orden terminó sin ejecutar nada: no hay posición que abrir.
+                log.error("[%s] Orden BUY no ejecutada (estado %s): no se abre posición.",
+                          self.name, outcome.status)
+                self.notifier.send(
+                    f"⚠️ [{self.name}] Orden de compra en {self.symbol} no ejecutada "
+                    f"(estado {outcome.status})."
+                )
+                return None
+            if outcome.filled:
+                fill_price, fill_qty = outcome.avg_price, outcome.executed_qty
                 slippage_pct = (fill_price / price - 1) * 100
                 # Reconstruir la posición con los datos reales de ejecución:
                 # SL/TP se recalculan desde el precio medio real de compra.
@@ -193,6 +229,15 @@ class TradingEngine:
                 slippage_note = f"\nSlippage: {slippage_pct:+.4f}%"
                 log.info("[%s] Fill real BUY: %.8f @ %.8f | slippage=%+.4f%%",
                          self.name, fill_qty, fill_price, slippage_pct)
+                if outcome.partial:
+                    log.warning("[%s] Compra ejecutada PARCIALMENTE (%s): la posición "
+                                "se registra solo con lo realmente comprado.",
+                                self.name, outcome.status)
+                    slippage_note += "\n⚠️ Ejecución parcial (resto cancelado)"
+            else:
+                log.warning("[%s] La orden BUY no reporta ejecución (estado '%s'); la "
+                            "posición se registra con el precio de la vela (%.2f) como "
+                            "estimación.", self.name, outcome.status, price)
         else:
             log.info("[%s] [PAPER] Compra simulada %.8f @ %.2f (SL %.2f / TP %.2f)",
                      self.name, position.quantity, price, position.stop_loss, position.take_profit)
@@ -229,17 +274,37 @@ class TradingEngine:
                 quantity=sell_qty,
             )
             log.info("[%s] Orden SELL real enviada (%s): %s", self.name, reason, resp)
-            fill = resolve_order_fill(self.client, self.symbol, resp)
-            if fill is None:
-                log.warning("[%s] La orden SELL no reporta ejecución; el PnL se "
-                            "calcula con el precio de la vela (%.2f).", self.name, price)
-            else:
-                fill_price, _fill_qty = fill
-                slippage_pct = (fill_price / price - 1) * 100
-                exit_price = fill_price
+            outcome = resolve_order_outcome(self.client, self.symbol, resp)
+            if outcome.failed:
+                # No se vendió nada: la posición sigue abierta y se
+                # reintentará el cierre en el próximo ciclo.
+                log.error("[%s] Orden SELL no ejecutada (estado %s): la posición "
+                          "sigue abierta; se reintentará.", self.name, outcome.status)
+                self.notifier.send(
+                    f"⚠️ [{self.name}] Orden de venta en {self.symbol} no ejecutada "
+                    f"(estado {outcome.status}). La posición sigue abierta."
+                )
+                return
+            if outcome.filled:
+                slippage_pct = (outcome.avg_price / price - 1) * 100
+                exit_price = outcome.avg_price
                 slippage_note = f"\nSlippage: {slippage_pct:+.4f}%"
                 log.info("[%s] Fill real SELL: @ %.8f | slippage=%+.4f%%",
-                         self.name, fill_price, slippage_pct)
+                         self.name, outcome.avg_price, slippage_pct)
+                if outcome.partial:
+                    # Solo se vendió una parte: el PnL se calcula sobre lo
+                    # realmente vendido; el resto queda sin vender en la cuenta.
+                    remainder = position.quantity - outcome.executed_qty
+                    position.quantity = outcome.executed_qty
+                    log.warning("[%s] Venta PARCIAL (%s): vendidas %.8f, quedan %.8f "
+                                "sin vender en la cuenta.", self.name, outcome.status,
+                                outcome.executed_qty, remainder)
+                    slippage_note += (f"\n⚠️ Venta parcial: {remainder:.8f} "
+                                      f"sin vender en la cuenta")
+            else:
+                log.warning("[%s] La orden SELL no reporta ejecución (estado '%s'); el "
+                            "PnL se calcula con el precio de la vela (%.2f).",
+                            self.name, outcome.status, price)
         pnl = self.risk.register_close(position, exit_price)
         self.global_risk.register_close(position, pnl)  # actualizar el riesgo global
         # Persistir el cierre y el nuevo estado diario.
