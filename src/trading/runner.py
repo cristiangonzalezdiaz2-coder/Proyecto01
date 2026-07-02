@@ -17,6 +17,23 @@ from .engine import TradingEngine
 log = get_logger("runner")
 
 
+def build_price_feed(config: AppConfig):
+    """Crea y arranca el feed de precios WebSocket si está habilitado.
+
+    Devuelve None si está deshabilitado o si falta websocket-client; en ese
+    caso los motores funcionan solo con REST, como siempre."""
+    if not config.use_websocket:
+        return None
+    from ..mexc.pricefeed import WebSocketPriceFeed
+
+    feed = WebSocketPriceFeed([b.symbol for b in config.bots],
+                              url=config.websocket_url or None)
+    if not feed.start():
+        return None
+    log.info("Feed WebSocket activado: stop-loss/trailing en tiempo casi real.")
+    return feed
+
+
 def build_global_risk(config: AppConfig) -> GlobalRiskManager:
     """Crea el gestor de riesgo global e inicializa su estado desde la BD."""
     manager = GlobalRiskManager(config.global_risk)
@@ -43,11 +60,13 @@ class MultiRunner:
         self.stop_event = threading.Event()
         self.threads: list[threading.Thread] = []
         self.global_risk = build_global_risk(config)
+        self.price_feed = build_price_feed(config)  # compartido entre bots
 
     def _run_bot(self, bot) -> None:
         """Crea y ejecuta un motor; si el arranque falla, no tumba a los demás."""
         try:
-            engine = TradingEngine(self.config, bot, global_risk=self.global_risk)
+            engine = TradingEngine(self.config, bot, global_risk=self.global_risk,
+                                   price_feed=self.price_feed)
             engine.run(stop_event=self.stop_event)
         except Exception as exc:  # noqa: BLE001
             log.error("[%s] El bot terminó por un error: %s", bot.name, exc)
@@ -73,3 +92,6 @@ class MultiRunner:
             for t in self.threads:
                 t.join(timeout=10)
             log.info("Todos los bots detenidos.")
+        finally:
+            if self.price_feed is not None:
+                self.price_feed.stop()

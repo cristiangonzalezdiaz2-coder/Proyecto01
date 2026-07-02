@@ -102,12 +102,20 @@ def klines_to_df(raw: list[list]) -> pd.DataFrame:
 
 
 class TradingEngine:
+    # Cadencia (s) del tick rápido de salidas cuando hay feed de precios WS.
+    FAST_TICK = 2.0
+
     def __init__(self, config: AppConfig, bot: BotConfig | None = None,
-                 global_risk: GlobalRiskManager | None = None):
+                 global_risk: GlobalRiskManager | None = None,
+                 price_feed=None):
         self.config = config
         self.bot = bot or config.bots[0]
         self.name = self.bot.name
         self.symbol = self.bot.symbol
+        # Feed de precios en tiempo real (opcional): objeto con .price(symbol)
+        # que devuelve el último precio fresco o None (ver mexc/pricefeed.py).
+        self.feed = price_feed
+        self.fast_tick = self.FAST_TICK
 
         self.client = MexcSpotClient(config.api_key, config.api_secret)
         self.strategy = load_strategy(self.bot.strategy.name, self.bot.strategy.params)
@@ -635,6 +643,26 @@ class TradingEngine:
             )
 
     # ------------------------------------------------------------------
+    def _check_exits(self, price: float) -> None:
+        """Trailing stop + salidas SL/TP contra un precio actual.
+
+        Lo usan el ciclo completo (_step) y el tick rápido del feed de
+        precios WebSocket (que reacciona en segundos entre poll y poll)."""
+        for position in self.risk.open_positions:
+            if self.risk.update_trailing(position, price):
+                if self.symbol_info is not None:
+                    position.stop_loss = self.symbol_info.round_price(position.stop_loss)
+                self.store.update_position_stop(position.id, position.stop_loss)
+                log.info("[%s] Trailing stop: stop-loss subido a %.2f (precio %.2f).",
+                         self.name, position.stop_loss, price)
+
+        for position in list(self.risk.open_positions):
+            reason = self.risk.should_close(position, price)
+            if reason == "take_profit" and position.tp_order_id:
+                continue  # el TP lo ejecuta la orden LIMIT del exchange
+            if reason:
+                self._market_sell(position, price, reason)
+
     def _step(self) -> None:
         """Un ciclo: obtener datos, evaluar salidas y luego entradas."""
         raw = self.client.get_klines(self.symbol, self.bot.interval, limit=200)
@@ -646,23 +674,8 @@ class TradingEngine:
         if self.live:
             self._check_exchange_tp()
 
-        # 2) Trailing stop: subir el stop-loss siguiendo al precio actual
-        #    (persistiendo el nuevo nivel para que sobreviva reinicios).
-        for position in self.risk.open_positions:
-            if self.risk.update_trailing(position, price):
-                if self.symbol_info is not None:
-                    position.stop_loss = self.symbol_info.round_price(position.stop_loss)
-                self.store.update_position_stop(position.id, position.stop_loss)
-                log.info("[%s] Trailing stop: stop-loss subido a %.2f (precio %.2f).",
-                         self.name, position.stop_loss, price)
-
-        # 3) Revisar salidas de posiciones abiertas (SL/TP) con el precio actual.
-        for position in list(self.risk.open_positions):
-            reason = self.risk.should_close(position, price)
-            if reason == "take_profit" and position.tp_order_id:
-                continue  # el TP lo ejecuta la orden LIMIT del exchange
-            if reason:
-                self._market_sell(position, price, reason)
+        # 2) y 3) Trailing stop + salidas SL/TP con el precio actual.
+        self._check_exits(price)
 
         # 4) Evaluar la estrategia SOLO con velas cerradas: la última vela de
         #    MEXC es la que está en formación y sus señales pueden deshacerse
@@ -691,40 +704,62 @@ class TradingEngine:
                 self._market_sell(position, price, "signal_sell")
 
     def run(self, stop_event: threading.Event | None = None) -> None:
-        """Bucle principal. Se detiene con Ctrl+C o cuando `stop_event` se activa."""
+        """Bucle principal. Se detiene con Ctrl+C o cuando `stop_event` se activa.
+
+        Sin feed de precios, ejecuta un ciclo completo cada poll_seconds (como
+        siempre). Con feed WebSocket, entre ciclo y ciclo hace ticks rápidos
+        (~cada fast_tick s) que solo comprueban stop-loss/trailing con el
+        último precio del WS: las salidas reaccionan en segundos."""
         log.info("[%s] Comprobando conectividad con MEXC...", self.name)
         self.client.ping()
-        log.info("[%s] Conectado. Iniciando bucle (cada %ds).",
-                 self.name, self.bot.poll_seconds)
+        log.info("[%s] Conectado. Iniciando bucle (cada %ds%s).",
+                 self.name, self.bot.poll_seconds,
+                 f", tick rápido {self.fast_tick:.0f}s" if self.feed is not None else "")
 
         def _stopped() -> bool:
             return stop_event is not None and stop_event.is_set()
 
         current_day = datetime.now(timezone.utc).date()
+        next_step = 0.0  # monotonic: el primer ciclo completo es inmediato
         try:
             while not _stopped():
-                today = datetime.now(timezone.utc).date()
-                if today != current_day:
-                    self.risk.reset_daily()
-                    self.global_risk.reset_daily(today.isoformat())  # una vez por día
-                    self.client.sync_time()  # corregir la deriva del reloj a diario
-                    self.store.save_daily_state(
-                        today.isoformat(), self.risk.daily_pnl, self.risk.halted, bot=self.name
-                    )
-                    current_day = today
-                    log.info("[%s] Nuevo día: contador de pérdidas reiniciado.", self.name)
+                if time.monotonic() >= next_step:
+                    today = datetime.now(timezone.utc).date()
+                    if today != current_day:
+                        self.risk.reset_daily()
+                        self.global_risk.reset_daily(today.isoformat())  # una vez por día
+                        self.client.sync_time()  # corregir la deriva del reloj a diario
+                        self.store.save_daily_state(
+                            today.isoformat(), self.risk.daily_pnl, self.risk.halted,
+                            bot=self.name
+                        )
+                        current_day = today
+                        log.info("[%s] Nuevo día: contador de pérdidas reiniciado.",
+                                 self.name)
 
-                try:
-                    self._step()
-                except Exception as exc:  # noqa: BLE001 - un fallo puntual no debe matar el bot
-                    log.error("[%s] Error en el ciclo: %s", self.name, exc)
+                    try:
+                        self._step()
+                    except Exception as exc:  # noqa: BLE001 - un fallo puntual no debe matar el bot
+                        log.error("[%s] Error en el ciclo: %s", self.name, exc)
+                    next_step = time.monotonic() + self.bot.poll_seconds
+                elif self.feed is not None and self.risk.open_positions:
+                    # Tick rápido: solo salidas, con el último precio del WS
+                    # (None si el feed no tiene dato fresco: se espera al poll).
+                    ws_price = self.feed.price(self.symbol)
+                    if ws_price is not None:
+                        try:
+                            self._check_exits(ws_price)
+                        except Exception as exc:  # noqa: BLE001
+                            log.error("[%s] Error en tick rápido: %s", self.name, exc)
 
-                # Espera interrumpible: si hay stop_event, reacciona al instante.
+                # Espera interrumpible hasta el próximo tick o ciclo.
+                wait_s = self.fast_tick if self.feed is not None \
+                    else max(next_step - time.monotonic(), 0.0)
                 if stop_event is not None:
-                    if stop_event.wait(self.bot.poll_seconds):
+                    if stop_event.wait(wait_s):
                         break
                 else:
-                    time.sleep(self.bot.poll_seconds)
+                    time.sleep(wait_s)
         except KeyboardInterrupt:
             log.info("[%s] Detenido por el usuario. PnL de la sesión: %.4f",
                      self.name, self.risk.daily_pnl)

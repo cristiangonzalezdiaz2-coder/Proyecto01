@@ -6,7 +6,7 @@
 """
 import pandas as pd
 
-from .base import Signal, Strategy
+from .base import Signal, Strategy, crossings_to_signals
 
 
 class MACrossoverStrategy(Strategy):
@@ -38,3 +38,14 @@ class MACrossoverStrategy(Strategy):
         if crossed_down:
             return Signal.SELL
         return Signal.HOLD
+
+    def generate_signals(self, candles: pd.DataFrame) -> list[Signal]:
+        """Versión vectorizada (O(n)): mismas señales que generate_signal."""
+        close = candles["close"]
+        fast = close.rolling(self.fast_period).mean()
+        slow = close.rolling(self.slow_period).mean()
+        fast_prev, slow_prev = fast.shift(1), slow.shift(1)
+        buy = (fast_prev <= slow_prev) & (fast > slow)
+        sell = (fast_prev >= slow_prev) & (fast < slow)
+        # Guarda de historia mínima: len < slow_period + 1 -> HOLD.
+        return crossings_to_signals(buy, sell, min_index=self.slow_period)

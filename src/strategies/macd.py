@@ -6,7 +6,7 @@ MACD = EMA(rápida) - EMA(lenta).  Señal = EMA(MACD, signal_period).
 """
 import pandas as pd
 
-from .base import Signal, Strategy
+from .base import Signal, Strategy, crossings_to_signals
 
 
 def compute_macd(close: pd.Series, fast: int, slow: int, signal: int):
@@ -47,3 +47,15 @@ class MACDStrategy(Strategy):
         if crossed_down:
             return Signal.SELL
         return Signal.HOLD
+
+    def generate_signals(self, candles: pd.DataFrame) -> list[Signal]:
+        """Versión vectorizada (O(n)): mismas señales que generate_signal."""
+        macd_line, signal_line = compute_macd(
+            candles["close"], self.fast, self.slow, self.signal
+        )
+        macd_prev, sig_prev = macd_line.shift(1), signal_line.shift(1)
+        buy = (macd_prev <= sig_prev) & (macd_line > signal_line)
+        sell = (macd_prev >= sig_prev) & (macd_line < signal_line)
+        # Las EMAs (adjust=False) no producen NaN, así que la guarda de
+        # historia mínima (len < slow + signal) hay que imponerla explícita.
+        return crossings_to_signals(buy, sell, min_index=self.slow + self.signal - 1)

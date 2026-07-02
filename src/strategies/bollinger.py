@@ -7,7 +7,7 @@ Cuando el precio se aleja mucho de la media tiende a volver ("reversión").
 """
 import pandas as pd
 
-from .base import Signal, Strategy
+from .base import Signal, Strategy, crossings_to_signals
 
 
 def compute_bands(close: pd.Series, period: int, num_std: float):
@@ -51,3 +51,13 @@ class BollingerStrategy(Strategy):
         if price_prev <= up_prev and price_now > up_now:
             return Signal.SELL
         return Signal.HOLD
+
+    def generate_signals(self, candles: pd.DataFrame) -> list[Signal]:
+        """Versión vectorizada (O(n)): mismas señales que generate_signal."""
+        close = candles["close"]
+        _, upper, lower = compute_bands(close, self.period, self.num_std)
+        close_prev = close.shift(1)
+        buy = (close_prev >= lower.shift(1)) & (close < lower)
+        sell = (close_prev <= upper.shift(1)) & (close > upper)
+        # Guarda de historia mínima: len < period + 1 -> HOLD.
+        return crossings_to_signals(buy, sell, min_index=self.period)
