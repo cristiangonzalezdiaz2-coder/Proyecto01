@@ -12,8 +12,10 @@ modular preparada para añadir futuros más adelante. Incluye modo simulación
 
 - ✅ Cliente REST de MEXC spot con firma HMAC-SHA256.
 - ✅ Modo **paper** (simulación) y **live** (órdenes reales).
-- ✅ Cuatro estrategias listas: cruce de medias, RSI, MACD y Bollinger
-  (framework fácil de extender).
+- ✅ Cuatro estrategias técnicas listas: cruce de medias, RSI, MACD y
+  Bollinger (framework fácil de extender).
+- ✅ **Agente de IA** (`ai_agent`): Claude analiza indicadores y velas recientes
+  y decide BUY/SELL/HOLD con justificación y nivel de confianza.
 - ✅ **Multi-bot**: varias estrategias/pares en paralelo, cada uno con su propio
   riesgo y estado, desglosados en el dashboard.
 - ✅ **Riesgo global compartido**: tope de exposición, posiciones y pérdida
@@ -97,7 +99,8 @@ Proyecto01/
 │   ├── config.py           # carga de .env + YAML
 │   ├── logger.py
 │   ├── mexc/               # cliente de la API de MEXC
-│   ├── strategies/         # estrategias (ma_crossover, rsi, macd, bollinger)
+│   ├── ai/                 # agente de IA (contexto de mercado + cliente Claude)
+│   ├── strategies/         # estrategias (ma_crossover, rsi, macd, bollinger, ai_agent)
 │   ├── risk/               # gestión de riesgo
 │   ├── trading/            # motor (engine) + runner multi-bot
 │   ├── persistence/        # almacenamiento en SQLite
@@ -200,10 +203,58 @@ parámetros (ver `config/config.example.yaml`).
 | `rsi` | Reversión | Compra al salir de sobreventa, vende al salir de sobrecompra | `period`, `oversold`, `overbought` |
 | `macd` | Momentum | Cruce de la línea MACD sobre su señal | `fast`, `slow`, `signal` |
 | `bollinger` | Volatilidad | Compra/vende cuando el precio rompe las bandas | `period`, `num_std` |
+| `ai_agent` | IA | Claude analiza el contexto técnico y decide con justificación | `model`, `min_confidence`, `min_candles`, `recent_candles` |
 
 Usa `python backtest.py --compare` para ver cuál rinde mejor en un par e
 intervalo concretos antes de elegir. Puedes añadir la tuya creando una clase que
 herede de `Strategy` en `src/strategies/` y registrándola en `STRATEGIES`.
+
+## Agente de IA (estrategia `ai_agent`)
+
+La estrategia `ai_agent` delega la decisión de trading en un agente de IA
+basado en **Claude** (API de Anthropic). En cada vela cerrada, el bot:
+
+1. Resume el mercado en un JSON compacto: precio, retornos recientes, RSI,
+   MACD, medias móviles, bandas de Bollinger, volatilidad, volumen relativo y
+   las últimas velas OHLCV (`src/ai/context.py`).
+2. Se lo envía a Claude con salidas estructuradas: la respuesta es siempre un
+   JSON validado con `signal` (BUY/SELL/HOLD), `confidence` (0–1), `reasoning`
+   y `key_risks` (`src/ai/agent.py`).
+3. Convierte la decisión en la señal que consume el motor. El **riesgo lo
+   sigue aplicando el bot** (stop-loss, take-profit, sizing, límites diarios y
+   globales): la IA solo decide la dirección.
+
+Salvaguardas integradas:
+
+- **Una llamada a la API por vela cerrada** (caché interna): con velas de 15m
+  son ~96 llamadas/día por bot, independientemente de `poll_seconds`.
+- Señales con confianza menor que `min_confidence` se degradan a HOLD.
+- Cualquier fallo (API caída, sin key, respuesta inválida o rechazada) produce
+  HOLD; el bot nunca se detiene por un error de la IA.
+- El backtest masivo está deshabilitado a propósito (costaría una llamada por
+  vela del histórico): valida el agente primero en modo `paper`.
+
+Puesta en marcha:
+
+```bash
+pip install anthropic                 # ya incluido en requirements.txt
+echo "ANTHROPIC_API_KEY=sk-ant-..." >> .env
+```
+
+```yaml
+# config/config.yaml
+strategy:
+  name: ai_agent
+  model: claude-opus-4-8    # modelo de Anthropic
+  min_confidence: 0.6       # umbral para aceptar BUY/SELL
+  min_candles: 60           # historia mínima antes de consultar
+  recent_candles: 20        # velas incluidas en el contexto
+```
+
+El razonamiento de cada decisión queda en el log (`logs/`), así puedes auditar
+por qué el agente compró, vendió o esperó. Recuerda que cada consulta tiene
+coste en la API de Anthropic y que un modelo de lenguaje no garantiza
+rentabilidad: trátalo como una estrategia más, con el mismo escepticismo.
 
 ## Optimización walk-forward
 

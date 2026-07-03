@@ -27,7 +27,11 @@ def _random_walk_df(n=150, seed=7):
                          "close": close, "volume": 1.0})
 
 
-@pytest.mark.parametrize("name", list(STRATEGIES))
+# Solo las estrategias backtesteables (ai_agent llamaría a la API por vela).
+VECTORIZABLE = [n for n, cls in STRATEGIES.items() if cls.supports_backtest]
+
+
+@pytest.mark.parametrize("name", VECTORIZABLE)
 def test_vectorized_matches_per_window(name):
     df = _random_walk_df()
     strat = load_strategy(name, {})
@@ -41,7 +45,7 @@ def test_vectorized_matches_per_window(name):
         )
 
 
-@pytest.mark.parametrize("name", list(STRATEGIES))
+@pytest.mark.parametrize("name", VECTORIZABLE)
 def test_vectorized_produces_some_signals(name):
     # Sanidad: con 150 velas de paseo aleatorio debe haber alguna señal
     # (si todo fuera HOLD, la paridad se cumpliría trivialmente).

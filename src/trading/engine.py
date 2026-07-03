@@ -119,6 +119,12 @@ class TradingEngine:
 
         self.client = MexcSpotClient(config.api_key, config.api_secret)
         self.strategy = load_strategy(self.bot.strategy.name, self.bot.strategy.params)
+        # Estrategias con contexto de par (p. ej. ai_agent) reciben el símbolo
+        # y el intervalo del bot si no vinieron ya en sus parámetros.
+        if getattr(self.strategy, "symbol", None) == "":
+            self.strategy.symbol = self.bot.symbol
+        if getattr(self.strategy, "interval", None) == "":
+            self.strategy.interval = self.bot.interval
         self.risk = RiskManager(self.bot.risk)
         # Riesgo global compartido (deshabilitado si no se pasa uno).
         self.global_risk = global_risk or GlobalRiskManager(GlobalRiskConfig())

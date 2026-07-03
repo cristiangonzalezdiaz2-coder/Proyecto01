@@ -34,6 +34,7 @@ db_path: data/bot.db
 #   rsi:           period, oversold, overbought    (reversión a la media)
 #   macd:          fast, slow, signal              (momentum)
 #   bollinger:     period, num_std                 (reversión por volatilidad)
+#   ai_agent:      model, min_confidence           (agente de IA con Claude)
 #
 strategy:
   name: ma_crossover          # nombre de la estrategia a cargar
@@ -55,6 +56,19 @@ strategy:
 #   name: bollinger
 #   period: 20
 #   num_std: 2.0
+#
+# Agente de IA (requiere ANTHROPIC_API_KEY en .env y `pip install anthropic`).
+# Claude analiza indicadores + últimas velas y decide BUY/SELL/HOLD con una
+# justificación. Hace UNA llamada a la API por vela cerrada (coste según
+# modelo e intervalo: con velas de 15m son ~96 llamadas/día por bot).
+# El stop-loss, take-profit y demás límites de riesgo siguen aplicándose
+# igual que con cualquier otra estrategia. Empieza SIEMPRE en modo paper.
+# strategy:
+#   name: ai_agent
+#   model: claude-opus-4-8      # modelo de Anthropic a usar
+#   min_confidence: 0.6         # señales con confianza menor se quedan en HOLD
+#   min_candles: 60             # historia mínima antes de consultar al agente
+#   recent_candles: 20          # velas OHLCV incluidas en el contexto
 
 # ---------------- Gestión de riesgo ----------------
 risk:

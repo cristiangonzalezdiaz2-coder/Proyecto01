@@ -20,6 +20,10 @@ class Strategy(ABC):
     """
 
     name: str = "base"
+    # False en estrategias que no pueden evaluarse vela a vela sobre el
+    # histórico (p. ej. ai_agent: una llamada a la API por vela). El backtest
+    # comparativo y las pruebas de vectorización las omiten.
+    supports_backtest: bool = True
 
     @abstractmethod
     def generate_signal(self, candles: pd.DataFrame) -> Signal:

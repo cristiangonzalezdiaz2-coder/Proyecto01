@@ -1,4 +1,5 @@
 """Estrategias de trading."""
+from .ai_agent import AIAgentStrategy
 from .base import Signal, Strategy, compute_signals
 from .bollinger import BollingerStrategy
 from .macd import MACDStrategy
@@ -11,6 +12,7 @@ STRATEGIES = {
     "rsi": RSIStrategy,
     "macd": MACDStrategy,
     "bollinger": BollingerStrategy,
+    "ai_agent": AIAgentStrategy,
 }
 
 
@@ -26,6 +28,7 @@ __all__ = [
     "Signal",
     "Strategy",
     "compute_signals",
+    "AIAgentStrategy",
     "MACrossoverStrategy",
     "RSIStrategy",
     "MACDStrategy",

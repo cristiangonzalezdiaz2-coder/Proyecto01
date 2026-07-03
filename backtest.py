@@ -120,6 +120,8 @@ def run_compare(symbol, interval, limit, fee_pct, trailing_pct=0.0, risk_cfg=Non
     log.info("-" * 56)
     rows = []
     for name in STRATEGIES:
+        if not STRATEGIES[name].supports_backtest:
+            continue  # p. ej. ai_agent: llamaría a la API por cada vela
         strat = load_strategy(name, {})  # parámetros por defecto de cada una
         res = simulate(df, symbol, strat, fee_pct, trailing_pct,
                        replace(risk_cfg) if risk_cfg is not None else None)
